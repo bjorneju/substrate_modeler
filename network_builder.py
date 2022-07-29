@@ -274,11 +274,11 @@ class Unit:
         self.type = type_description
 
     def get_substate(self, unit_indices):
+            
         return tuple(
             [
                 self.substrate_state[i]
-                for i in self.substrate_indices
-                if i in unit_indices
+                for i in unit_indices
             ]
         )
 
@@ -326,6 +326,9 @@ class CompositeUnit:
     ):
 
         # Construct Units for each of the subunits constituting the CompositeUnit
+        if input_state==None:
+            input_state = [input_state]*len(inputs)
+            
         units = [
             Unit(
                 index,
@@ -342,6 +345,9 @@ class CompositeUnit:
 
         # Store the list of indices that input to the unit (one pr subunit).
         self.inputs = inputs
+        
+        self.substrate_state = units[0].substrate_state
+        self.substrate_indices = units[0].substrate_indices
 
         # set the TPM defining the combination of subunit activations into a output state for the composite unit.
         self.set_mechanism_combination(mechanism_combination)
@@ -433,6 +439,10 @@ class CompositeUnit:
         elif type(mechanism_combination) == np.ndarray:
             # if specification is explicit as a TPM, it is just set as is
             self.mechanism_combination = mechanism_combination
+            
+        elif type(mechanism_combination) == str:
+            # if specification is explicit as a TPM, it is just set as is
+            self.mechanism_combination = mechanism_combination
 
     def combine_unit_tpms(self, tpms):
         """
@@ -482,7 +492,8 @@ class CompositeUnit:
             return unit_activation
 
         # Expand all TPMs to be the length of the unit's full set of inputs
-        all_inputs = sorted(tuple(set([i for indices in self.inputs for i in indices])))
+        #all_inputs = sorted(tuple(set([i for indices in self.inputs for i in indices])))
+        all_inputs = tuple(set([i for indices in self.inputs for i in indices]))
         all_input_states = list(pyphi.utils.all_states(len(all_inputs)))
 
         expanded_tpms = []
@@ -505,18 +516,57 @@ class CompositeUnit:
         expanded_tpms = np.array(expanded_tpms).T
 
         # combine subunit TPMs into composite unit tpm
-        tpm = pyphi.convert.to_md(
-            np.array(
-                [
+        if not type(self.mechanism_combination) == str:
+            tpm = pyphi.convert.to_md(
+                np.array(
                     [
-                        combined_activation_probability(
-                            activation_probabilities, self.mechanism_combination
-                        )
+                        [
+                            combined_activation_probability(
+                                activation_probabilities, self.mechanism_combination
+                            )
+                        ]
+                        for activation_probabilities in expanded_tpms
                     ]
-                    for activation_probabilities in expanded_tpms
-                ]
+                )
             )
-        )
+        else:
+            # here we can add specific cases of "string specified unit combinations" that do not adhere to the above logic of using another TPM to combine them
+            # For example, we can have one where the Unit matches the output of the "strongest" subunit.
+            if self.mechanism_combination == "strongest":
+                def get_strongest(P):
+                    Q = np.array([np.abs(p-0.5) for p in P])
+                    return P[np.argmax(Q)]
+                    
+                tpm = pyphi.convert.to_md(
+                    np.array(
+                        [
+                            [
+                                get_strongest(
+                                    activation_probabilities
+                                )
+                            ]
+                            for activation_probabilities in expanded_tpms
+                        ]
+                    )
+                )
+            elif self.mechanism_combination == "average":
+                def get_strongest(P):
+                    Q = np.array([np.abs(p-0.5) for p in P])
+                    return P[np.argmax(Q)]
+                    
+                tpm = pyphi.convert.to_md(
+                    np.array(
+                        [
+                            [
+                                np.mean(
+                                    activation_probabilities
+                                )
+                            ]
+                            for activation_probabilities in expanded_tpms
+                        ]
+                    )
+                )
+
 
         # set some final properties
         self.all_inputs = self.inputs * 1
@@ -530,7 +580,8 @@ class CompositeUnit:
             units (list[Unit]): all the units that constitute the composite unit.
 
         """
-        inputs = sorted(tuple(set([ix for unit in units for ix in unit.inputs])))
+        #inputs = sorted(tuple(set([ix for unit in units for ix in unit.inputs])))
+        inputs = tuple(set([ix for unit in units for ix in unit.inputs]))
         return inputs
 
     def composite_input_state(self, units):
@@ -543,7 +594,9 @@ class CompositeUnit:
 
         # first get the IDs of units that input to subunits
         composite_inputs = self.composite_inputs(units)
+        input_state = self.get_subset_state(self.substrate_state, composite_inputs)
 
+        '''
         # go through units to pick out their input states. If the same unit appears multiply, then the state is forced to be whichever state appeared first.
         input_unit_states = dict()
         for unit in units:
@@ -564,6 +617,8 @@ class CompositeUnit:
         input_state = tuple(
             [input_unit_states[input_unit] for input_unit in composite_inputs]
         )
+        '''
+        
         return input_state
 
     # THIS IS WRONG! IT DOES NOT GET THE RIGHT STATE BECAUSE IT DOESNT CARE ABOUT THE FULL SET OF INDICES
@@ -574,7 +629,7 @@ class CompositeUnit:
             state (tuple[int(binary)]): The (binary) state of the full set of inputs.
             subset_indices (tuple[int]): The indices (relative to the state) for the subset.
         """
-        return tuple([state[i] for i, ix in enumerate(subset_indices)])
+        return tuple([state[ix] for i, ix in enumerate(subset_indices)])
 
     # TODO do we need more than the index?
     def to_json(self):
@@ -595,7 +650,7 @@ class Substrate:
         state (tuple)
     """
 
-    def __init__(self, units):
+    def __init__(self, units, state=None):
 
         # Set indices of the inputs.
         self.node_indices = tuple([unit.index for unit in units])
@@ -605,34 +660,50 @@ class Substrate:
 
         # This node's index in the list of nodes.
         self.create_cm(units)
+        
+        # storing the units
+        self.units = units
 
         substrate_tpm = []
-        substrate_units = dict()
-        # running through all possible substrate states
-        for state in tqdm(list(pyphi.utils.all_states(len(units)))):
+        
+        if state==None:
+            # running through all possible substrate states
+            for state in tqdm(list(pyphi.utils.all_states(len(units)))):
 
-            # setting auxillary substrate state
+                # setting auxillary substrate state
+                self.state = state
+
+                # check that the state of (state dependent) units
+                # and their inputs match the substrate state
+                units = self.validate_unit_states(units)
+
+                # Combine Unit TPMs to substrate TPM
+                # adding relevant row from the matrix to the substrate tpm
+                substrate_tpm.append(self.combine_unit_tpms(units, state))
+
+            self.tpm = pyphi.convert.to_md(np.array(substrate_tpm))
+            self.state = None
+
+            # validating unit
+            assert self.validate(), "Substrate did not pass validation"
+        
+        else:
             self.state = state
+            # running through all possible substrate states
+            for past_state in tqdm(list(pyphi.utils.all_states(len(units)))):
 
-            # check that the state of (state dependent) units
-            # and their inputs match the substrate state
-            units = self.validate_unit_states(units)
+                # check that the state of (state dependent) units
+                # and their inputs match the substrate state
+                units = self.validate_unit_states(units)
 
-            # Combine Unit TPMs to substrate TPM
-            state_tpm = self.combine_unit_tpms(units)
+                # Combine Unit TPMs to substrate TPM
+                # adding relevant row from the matrix to the substrate tpm
+                substrate_tpm.append(self.combine_unit_tpms(units, past_state))
 
-            # adding relevant row from the matrix to the substrate tpm
-            substrate_tpm.append(list(state_tpm[state]))
+            self.tpm = pyphi.convert.to_md(np.array(substrate_tpm))
 
-            # storing state dependent units
-            substrate_units[state] = units
-
-        self.tpm = pyphi.convert.to_md(np.array(substrate_tpm))
-        self.state = None
-        self.units = substrate_units
-
-        # validating unit
-        assert self.validate(), "Substrate did not pass validation"
+            # validating unit
+            assert self.validate(), "Substrate did not pass validation"
 
     def validate_unit_states(self, units):
 
@@ -657,16 +728,30 @@ class Substrate:
                         )
                     )"""
                     # redefining unit
-                    unit = Unit(
-                        unit.index,
-                        unit.inputs,
-                        params=unit.params,
-                        label=unit.label,
-                        state=substrate_unit_state,
-                        input_state=substrate_input_state,
-                        substrate_state=self.state,
-                        substrate_indices=self.node_indices,
-                    )
+                    if unit.params['mechanism'] == 'composite':
+                        unit = CompositeUnit(
+                            unit.index,
+                            unit.params['CompositeUnit'].all_inputs,
+                            params=unit.params['CompositeUnit'].params,
+                            label=unit.label,
+                            state=substrate_unit_state,
+                            input_state=substrate_input_state,
+                            substrate_state=self.state,
+                            substrate_indices=self.node_indices,
+                            mechanism_combination=unit.params['CompositeUnit'].mechanism_combination,
+                        ).Unit
+                        
+                    else:
+                        unit = Unit(
+                            unit.index,
+                            unit.inputs,
+                            params=unit.params,
+                            label=unit.label,
+                            state=substrate_unit_state,
+                            input_state=substrate_input_state,
+                            substrate_state=self.state,
+                            substrate_indices=self.node_indices,
+                        )
 
             new_units.append(unit)
 
@@ -684,6 +769,9 @@ class Substrate:
     def __str__(self):
         return self.__repr__()
 
+    def __len__(self):
+        return len(self.units)
+    
     def __eq__(self, other):
         """Return whether this node equals the other object.
 
@@ -701,36 +789,21 @@ class Substrate:
             and self.inputs == other.inputs
             and self.outputs == other.outputs
         )
-
-    def combine_unit_tpms(self, units):
+        
+    def combine_unit_tpms(self, units, past_state):
+        
+        unit_response = []
+        # going through each unit to find its state-dependent activation probability
+        for unit in units:
+            unit_response.append(float(unit.tpm[tuple([past_state[i] for i in unit.inputs])]))
+        '''# sorting the activation probability in an ascending order
+        full_tpm = np.array(unit_response)
         substrate_tpm = []
-        # going through each unit
-        for unit in (
-            tqdm(units, desc="Expanding unit tpms to all substrate states")
-            if len(units) > 20
-            else units
-        ):
+        for ix in sorted(set(self.node_indices)):
+            substrate_tpm.append(full_tpm[ix])
 
-            unit_tpm = []
-            # looping through every substrate state
-            for state in pyphi.utils.all_states(len(set(self.node_indices))):
-                unit_input_state = tuple([state[i] for i in unit.inputs])
-                unit_tpm.append(float(unit.tpm[unit_input_state]))
-
-            substrate_tpm.append(unit_tpm)
-
-        # combining the unit TPMs into a single state by node tpm
-        full_tpm = np.array(substrate_tpm)
-        substrate_tpm = []
-        ixs = sorted(set(self.node_indices))
-        for ix in (
-            tqdm(ixs, desc="combining unit tpms")
-            if len(ixs) > 20
-            else sorted(set(self.node_indices))
-        ):
-            substrate_tpm.append(full_tpm[ix, :].tolist())
-
-        return pyphi.convert.to_multidimensional(np.array(substrate_tpm).T)
+        return substrate_tpm'''
+        return unit_response
 
     def create_cm(self, units):
         cm = np.zeros((len(self.node_indices), len(self.node_indices)))
@@ -746,30 +819,54 @@ class Substrate:
         return pyphi.network.Network(self.tpm, self.cm, self.node_labels)
 
     def get_subsystem(self, state, nodes):
-        return pyphi.subsystem.Subsystem(self.get_network(), state, nodes)
+        # make sure the substrate is state_specific
+        if self.state==state:
+            return pyphi.subsystem.Subsystem(self.get_network(), state, nodes)
+        else:
+            print('remaking substrate to enforce correct state dependence')
+            substrate = Substrate(self.units, state=state)
+            return pyphi.subsystem.Subsystem(substrate.get_network(), state, nodes)
 
-    def plot_model(self, state=None):
+    def get_model(self, state=None):
         rows, cols = np.where(self.cm == 1)
         edges = zip(rows.tolist(), cols.tolist())
         gr = nx.DiGraph()
         gr.add_edges_from(edges)
+        gr.graph["params"] = "test"
 
+        return gr
+        
+    def plot_model(self, state=None):
+        
+        gr = self.get_model(state=None)
         nodes = gr.nodes
-
-        self.model = gr
-
+        
         if state == None:
             state = (1,) * len(self.node_indices)
 
         nx.draw(
             gr,
-            pos=nx.kamada_kawai_layout(gr),
             node_size=500,
             labels={i: l for i, l in enumerate(self.node_labels)},
             with_labels=True,
             node_color=["blue" if state[s] == 1 else "gray" for s in nodes],
         )
         plt.show()
+        
+    def simulate(self,initial_state=None,timesteps=1000):
+
+        rng = np.random.default_rng(0)
+        if initial_state==None:
+            initial_state = tuple(rng.integers(0,2,len(self)))
+        states = [initial_state]
+
+        for t in range(timesteps):
+            P_next = self.tpm[states[-1]]
+            comparison = rng.random(len(initial_state))
+
+            states.append(tuple([1 if P>c else 0 for P,c in zip(P_next, comparison)]))
+
+        return states
 
     # TODO do we need more than the index?
     def to_json(self):
