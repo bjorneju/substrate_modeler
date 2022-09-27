@@ -1,14 +1,14 @@
 from setuptools import setup
 
 setup(
-    name="pyphi_units",
+    name="units",
     version="0.1.0",
     description="Create pyphi substrates from the ground up",
     url="https://github.com/bjorneju/pyphi_units",
     author="Bjørn E juel",
     author_email="bjorneju@gmail.com",
     license="BSD 2-clause",
-    packages=["pyphi_units"],
+    packages=["units"],
     install_requires=[
         "tqdm",
         "numpy",
