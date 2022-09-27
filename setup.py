@@ -8,7 +8,7 @@ setup(
     author="Bjørn E juel",
     author_email="bjorneju@gmail.com",
     license="BSD 2-clause",
-    packages=[],
+    packages=["units"],
     install_requires=[
         "tqdm",
         "numpy",
@@ -16,7 +16,6 @@ setup(
         "networkx",
         "pyphi",
         "matplotlib",
-        "string",
     ],
     classifiers=[
         "Development Status :: 1 - Planning",
