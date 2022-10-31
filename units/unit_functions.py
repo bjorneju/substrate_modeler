@@ -89,6 +89,67 @@ def sor_gate(
     return tpm
 
 
+def mismatch_pattern_detector(
+    unit, i=0, pattern_selection=None, selectivity=None, floor=None, ceiling=None
+):
+    # This mechanism is selective to certain inputs (i.e. they turn it ON with P=ceiling, while the remaining possible input patterns turn it OFF with P=floor). However, it's selectivity (probability of turning on) depends the state of the unit: if the unit is already in the state that matches the pattern, then the effect of the inputs is reduced by the selectivity factor. That is, if the unit is ON, and one of its patterns are on its inputs, then the probability that *this mechanism* will turn keep it ON in the next step i P=0.5+(ceiling-0.5)/selectivity.
+    # The mechanism is supposed to mimic short-term plasticity mechanisms (or other short term adaptive changes in the function of cells) that make them strongly responsive to mismatching/unpredicted inputs, but weakly coupled to inputs that provide no new information (inputs that match the predicted state of things). 
+
+    # Ensure states are tuples
+    pattern_selection = list(map(tuple, pattern_selection))
+
+    # Ensure nceiling is not more than 1
+    if ceiling > 1:
+        ceiling = 1.0
+        
+    if floor==None:
+        floor = 1.0-ceiling
+
+    # Ensure selectivity is larger than 1
+    if not selectivity > 1:
+        print(
+            "Selectivity for SOR gates must be bigger than 1, adjusting to inverse of value given."
+        )
+        selectivity = 1 / selectivity
+
+    # Ensure unit has input state
+    if unit.input_state == None:
+        print(
+            "input state not given for {} unit {}. Setting to all off.".format(
+                unit.params["mechanism"], unit.label
+            )
+        )
+        unit.set_input_state((0,) * len(unit.inputs))
+
+    # Ensure unit has state
+    if unit.state == None:
+        print("State not given unit {}. Setting to off.".format(unit.label))
+        unit.set_state((0,))
+
+    # Check if the unit is ON
+    if unit.state == (1,):
+        # since it is ON, it will only respond strongly if a non-pattern is on its inputs
+        P_pattern = 0.5+(ceiling-0.5)/selectivity
+        P_no_pattern = floor
+    else:
+        # since it is OFF, it will only respond strongly if a pattern is on its inputs
+        P_pattern = ceiling
+        P_no_pattern = 0.5-(0.5-floor)/selectivity
+        
+    
+    # the tpm is uniform for all states except the input state (i.e. short term plasticity)
+    N = len(unit.input_state)
+    tpm = np.ones([2] * N)
+    
+    for state in pyphi.utils.all_states(N):
+        if state in pattern_selection:
+            tpm[state] = P_pattern
+        else:
+            tpm[state] = P_no_pattern
+
+    return tpm
+
+
 def copy_gate(unit, i=0, floor=None, ceiling=None):
     tpm = np.ones([2]) * floor
     tpm[1] = ceiling
