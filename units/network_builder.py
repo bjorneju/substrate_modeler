@@ -17,8 +17,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
-
-from unit_functions import *
+from units.unit_functions import *
 
 """ 
     LOCAL VARIABLES, used to validate the objects created.
@@ -42,6 +41,12 @@ UNIT_VALIDATION = {
             pattern_selection=[], selectivity=10, floor=0.0, ceiling=1.0
         ),
         function=sor_gate,
+    ),
+    "mismatch_pattern_detector": dict(
+        default_params=dict(
+            pattern_selection=[], selectivity=10, floor=0.0, ceiling=1.0
+        ),
+        function=mismatch_pattern_detector,
     ),
     "copy": dict(default_params=dict(floor=0.0, ceiling=1.0), function=copy_gate),
     "and": dict(default_params=dict(floor=0.0, ceiling=1.0), function=and_gate),
@@ -270,7 +275,13 @@ class Unit:
                         # if params include a specification of a unit
                         func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
                         self.tpm = func(self, **para)
+                        
                     elif self.modulation['type']=='virtual':
+                        
+                        print('VIRTUAL MODULATION DOES NOT WORK. THERE ARE MISSHAPEN TPMS. CHECK reshape_to_md FUNCTION. THERE IS AN EXTRA DIMENSION AT THE END WHEN THE UNIT ITSELF IS IN THE INPUTS. BUT THIS SHOWS UP ALWAYS FOR VIRTUAL MODULATION')
+                        
+                        # this means the modulator does not acually modulate the mechanism of the unit, 
+                        # but rather acts as a separate input unit that "virtually" modulated the mechanism.
                         
                         # if params include a specification of a unit
                         func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
@@ -303,11 +314,19 @@ class Unit:
                             mod_ON = any([in_state[i] for i in mod_ixs])
                             true_input_state = tuple([in_state[i] for i in true_inputs])
                             if mod_ON:
-                                updated_tpm.append([modulated_tpm[true_input_state][0]])
+                                prob = modulated_tpm[true_input_state]
                             else:
-                                updated_tpm.append([tpm[true_input_state][0]])
+                                prob = tpm[true_input_state]
+                            
+                            if type(prob)==np.ndarray:
+                                # this happens when self is in the true inputs
+                                updated_tpm.append([prob[0]])
+                            else:
+                                updated_tpm.append([prob])
                                 
                         self.tpm = reshape_to_md(updated_tpm)
+                        print(self.tpm.shape)
+                        print(self.inputs)
                     
                 else:
                     # if params include a specification of a unit
