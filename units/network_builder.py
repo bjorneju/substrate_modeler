@@ -229,7 +229,7 @@ class Unit:
             and self.outputs == other.outputs
         )
 
-    def set_unit_tpm(self):
+    def set_unit_tpm(self, substrate_state=None):
         """np.ndarray: The unit TPM.
 
         A multidimensional array, containing the probabilities for the unit
@@ -251,7 +251,7 @@ class Unit:
                     state=c_unit.state,
                     input_state=c_unit.input_state,
                     mechanism_combination=c_unit.mechanism_combination,
-                    substrate_state=self.substrate_state,
+                    substrate_state=self.substrate_state if substrate_state==None else substrate_state,
                     substrate_indices=self.substrate_indices,
                     modulation=self.modulation,
                 ).tpm
@@ -266,12 +266,24 @@ class Unit:
 
                         #check that a modulator is ON
                         if any(self.get_substate(self.modulation['modulators'])):
-                            para.update(
-                                {
-                                    self.modulation['parameter']: 
-                                    self.modulation['function'](para[self.modulation['parameter']])
-                                }
-                            )
+
+                            # check if modulation is state dependent
+                            if type(self.modulation['function'])==list:
+                                # if it is state dependent, the list contains modulation for OFF on index 0, and modulation for ON on index 1
+                                para.update(
+                                    {
+                                        self.modulation['parameter']: 
+                                        self.modulation['function'][self.state[0]](para[self.modulation['parameter']])
+                                    }
+                                )
+
+                            else:
+                                para.update(
+                                    {
+                                        self.modulation['parameter']: 
+                                        self.modulation['function'](para[self.modulation['parameter']])
+                                    }
+                                )
                         # if params include a specification of a unit
                         func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
                         self.tpm = func(self, **para)
@@ -342,6 +354,18 @@ class Unit:
         A tuple of 0's and 1's (One pr input) indicating the current state of the inputs.
         """
         self.input_state = state
+
+    def set_substrate_state(self, state):
+        """The current state of the substrate.
+
+        Args:
+            state (tuple[int]): The state of the inputs to the unit
+
+        A tuple of 0's and 1's (One pr input) indicating the current state of the inputs.
+        """
+        self.substrate_state = state
+        self.set_state(self.get_substate((self.index,)))
+        self.set_unit_tpm(substrate_state=state)
 
     def set_state(self, state):
         """The current state of the unit.
