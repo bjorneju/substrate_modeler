@@ -1,5 +1,6 @@
 """
 TODO:
+- CHANGE THE COMPOSITE UNIT TO JUST TAKE A LIST OF UNITS AND COMBINE THEM (but how?!)
 - FIGURE OUT WEIRD PROBABILITIES
 - consider making the CompositeUnit somehow also an instance of the Unit. Just a special case?
 - consider how to make MechanismCombination dependent on the probabilities
@@ -65,7 +66,7 @@ UNIT_VALIDATION = {
     ),
     "modulated_sigmoid": dict(
         default_params=dict(
-            input_weights=[], determinism=4, threshold=0.5, floor=0.0, ceiling=1.0
+            input_weights=[], determinism=4, threshold=0.5, modulation={'modulator':tuple([]), 'determinism':0.0, 'threshold':0.0}, floor=0.0, ceiling=1.0
         ),
         function=modulated_sigmoid,
     ),

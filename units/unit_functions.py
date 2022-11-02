@@ -1,4 +1,5 @@
 import numpy as np
+from itertools import product
 import pyphi
 
 """
@@ -251,33 +252,58 @@ def modulated_sigmoid(
     input_weights=None,
     determinism=None,
     threshold=None,
+    modulation=None,
     floor=None,
     ceiling=None,
 ):
-    # modulation by the last unit in the inputs.
-    # modulation consists in a linear shift in the threshold of the sigmoid, distance given by last value in input_weights
+    # modulation must be a dict like {'modulator': tuple(index), 'threshold': float, 'determinism': float}
+    # modulation will update the sigmoid function as indicated by the functions, and depending on whether the unit is ON or OFF
 
-    def LogFunc(x, determinism, threshold):
+
+    # Ensure unit has state
+    if unit.state == None:
+        print("State not given unit {}. Setting to off.".format(unit.label))
+        unit.set_state((0,))
+
+    def LogFunc(input_state, modulation_state, unit_state, weights, determinism, threshold):
+        x = sum(
+            input_state * np.array([weight for weight in weights])
+        )
+        # count how many of the modulators are ON
+        mods_on = sum(modulation_state)
+
+        # modulate threshold based on unit state and the state of the modulators
+        new_threshold = threshold + unit_state*mods_on*modulation['threshold']
+        
+        # modulate determinism based on unit state and the state of the modulators
+        new_determinism = determinism + unit_state*mods_on*modulation['determinism']
+
         y = ceiling * (
-            floor + (1 - floor) / (1 + np.e ** (-determinism * (x - threshold)))
+            floor + (1 - floor) / (1 + np.e ** (-new_determinism * (x - new_threshold)))
         )
         return y
 
-    n_nodes = len(input_weights)
+    # first inputs will be interpreted as true inputs, while the last will be modulator inputs
+    n_mods = len(modulation['modulator'])
+    n_inputs = len(input_weights) 
+    n_nodes = n_inputs + n_mods
+
+    unit_state = unit.state[0]*2 - 1 # making unit state "ising" rather than binary, to make modulation symmetric
 
     # producing transition probability matrix
     tpm = np.array(
         [
             [
                 LogFunc(
-                    sum(
-                        state[:-1] * np.array([weight for weight in input_weights[:-1]])
-                    ),
+                    input_state,
+                    modulation_state,
+                    unit_state,
+                    input_weights,
                     determinism,
-                    threshold - input_weights[-1] * state[-1],
+                    threshold
                 )
             ]
-            for state in pyphi.utils.all_states(n_nodes)
+            for modulation_state, input_state in product(pyphi.utils.all_states(n_mods), pyphi.utils.all_states(n_inputs))
         ]
     )
 
