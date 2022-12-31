@@ -26,9 +26,7 @@ from units.unit_functions import *
 
 UNIT_VALIDATION = {
     "gabor": dict(
-        default_params=dict(
-            preferred_states=[], floor=0.0, ceiling=1.0
-        ),
+        default_params=dict(preferred_states=[], floor=0.0, ceiling=1.0),
         function=gabor_gate,
     ),
     "sigmoid": dict(
@@ -66,9 +64,30 @@ UNIT_VALIDATION = {
     ),
     "modulated_sigmoid": dict(
         default_params=dict(
-            input_weights=[], determinism=4, threshold=0.5, modulation={'modulator':tuple([]), 'determinism':0.0, 'threshold':0.0}, floor=0.0, ceiling=1.0
+            input_weights=[],
+            determinism=4,
+            threshold=0.5,
+            modulation={"modulator": tuple([]), "determinism": 0.0, "threshold": 0.0},
+            floor=0.0,
+            ceiling=1.0,
         ),
         function=modulated_sigmoid,
+    ),
+    "stabilized_sigmoid": dict(
+        default_params=dict(
+            input_weights=[],
+            determinism=4,
+            threshold=0.5,
+            modulation={
+                "modulator": tuple([]),
+                "determinism": 0.0,
+                "threshold": 0.0,
+                "selectivity": 0.0,
+            },
+            floor=0.0,
+            ceiling=1.0,
+        ),
+        function=stabilized_sigmoid,
     ),
     "biased_sigmoid": dict(
         default_params=dict(
@@ -78,12 +97,14 @@ UNIT_VALIDATION = {
     ),
 }
 
+
 def reshape_to_md(tpm):
     N = int(np.log2(len(tpm)))
     try:
         return tpm.reshape([2] * N + [1], order="F").astype(float)
     except:
         return pyphi.convert.to_md(tpm)
+
 
 class Unit:
     """A unit that can constitute a substrate.
@@ -120,11 +141,11 @@ class Unit:
         tpm=None,
         substrate_state=None,
         substrate_indices=None,
-        modulation=None
+        modulation=None,
     ):
         # Storing the parameters
         self.params = params
-        
+
         # Storing modulation parameters
         self.modulation = modulation
 
@@ -143,25 +164,28 @@ class Unit:
         # sset substrate indices and state
         self.substrate_indices = (
             tuple(range(np.max((index,) + tuple(inputs)) + 1))
-            if substrate_indices==None
+            if substrate_indices == None
             else substrate_indices
         )
         self.substrate_state = (
-            [0,] * len(self.substrate_indices)
-            if substrate_state==None
+            [
+                0,
+            ]
+            * len(self.substrate_indices)
+            if substrate_state == None
             else substrate_state
         )
-        
-        # if unit and input states are given, but substrate state is not, then the unit states are used
-        if substrate_state==None and not state==None:
-            self.substrate_state[self.index] = state[0] 
-        if substrate_state==None and not input_state==None:
+
+        # if unit and input states are given, but substrate state is not, then the unit states are used. Otherwise, these are inherited from substrate state
+        if substrate_state == None and not state == None:
+            self.substrate_state[self.index] = state[0]
+        if substrate_state == None and not input_state == None:
             for i_s, i in zip(input_state, inputs):
                 self.substrate_state[i] = i_s
         self.substrate_state = tuple(self.substrate_state)
 
         # Node labels used in the system
-        if not label==None:
+        if not label == None:
             self.label = label
         else:
             self.label = str(self.index)
@@ -169,7 +193,9 @@ class Unit:
         # Setting unit state (always congruent with the substrate state )
         self.state = self.get_substate((index,))
         #  and input (only congruent if not explicitly given)
-        self.input_state = self.get_substate(tuple(inputs)) if input_state==None else input_state
+        self.input_state = (
+            self.get_substate(tuple(inputs)) if input_state == None else input_state
+        )
         # validating unit
         assert self.validate(), "Unit did not pass validation"
 
@@ -178,7 +204,6 @@ class Unit:
             self.set_unit_tpm()
         else:
             self.tpm = tpm
-            
 
     def validate(self):
         """Return whether the specifications for the unit are valid.
@@ -252,7 +277,9 @@ class Unit:
                     state=c_unit.state,
                     input_state=c_unit.input_state,
                     mechanism_combination=c_unit.mechanism_combination,
-                    substrate_state=self.substrate_state if substrate_state==None else substrate_state,
+                    substrate_state=self.substrate_state
+                    if substrate_state == None
+                    else substrate_state,
                     substrate_indices=self.substrate_indices,
                     modulation=self.modulation,
                 ).tpm
@@ -261,67 +288,88 @@ class Unit:
                 )
 
             else:
-                if not self.modulation==None and not type(not self.modulation)==list:
-                    if self.modulation['type']=='actual':
+                if (
+                    not self.modulation == None
+                    and not type(not self.modulation) == list
+                ):
+                    if self.modulation["type"] == "actual":
                         para = self.params["params"].copy()
 
-                        #check that a modulator is ON
-                        if any(self.get_substate(self.modulation['modulators'])):
+                        # check that a modulator is ON
+                        if any(self.get_substate(self.modulation["modulators"])):
 
                             # check if modulation is state dependent
-                            if type(self.modulation['function'])==list:
+                            if type(self.modulation["function"]) == list:
                                 # if it is state dependent, the list contains modulation for OFF on index 0, and modulation for ON on index 1
                                 para.update(
                                     {
-                                        self.modulation['parameter']: 
-                                        self.modulation['function'][self.state[0]](para[self.modulation['parameter']])
+                                        self.modulation["parameter"]: self.modulation[
+                                            "function"
+                                        ][self.state[0]](
+                                            para[self.modulation["parameter"]]
+                                        )
                                     }
                                 )
 
                             else:
                                 para.update(
                                     {
-                                        self.modulation['parameter']: 
-                                        self.modulation['function'](para[self.modulation['parameter']])
+                                        self.modulation["parameter"]: self.modulation[
+                                            "function"
+                                        ](para[self.modulation["parameter"]])
                                     }
                                 )
                         # if params include a specification of a unit
                         func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
                         self.tpm = func(self, **para)
-                        
-                    elif self.modulation['type']=='virtual':
-                        
-                        print('VIRTUAL MODULATION DOES NOT WORK. THERE ARE MISSHAPEN TPMS. CHECK reshape_to_md FUNCTION. THERE IS AN EXTRA DIMENSION AT THE END WHEN THE UNIT ITSELF IS IN THE INPUTS. BUT THIS SHOWS UP ALWAYS FOR VIRTUAL MODULATION')
-                        
-                        # this means the modulator does not acually modulate the mechanism of the unit, 
+
+                    elif self.modulation["type"] == "virtual":
+
+                        print(
+                            "VIRTUAL MODULATION DOES NOT WORK. THERE ARE MISSHAPEN TPMS. CHECK reshape_to_md FUNCTION. THERE IS AN EXTRA DIMENSION AT THE END WHEN THE UNIT ITSELF IS IN THE INPUTS. BUT THIS SHOWS UP ALWAYS FOR VIRTUAL MODULATION"
+                        )
+
+                        # this means the modulator does not acually modulate the mechanism of the unit,
                         # but rather acts as a separate input unit that "virtually" modulated the mechanism.
-                        
+
                         # if params include a specification of a unit
                         func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
                         tpm = func(self, **self.params["params"])
-                        
+
                         # create the modulated tpm
                         para = self.params["params"].copy()
 
-                        #check that a modulator is ON
-                        if any(self.get_substate(self.modulation['modulators'])):
+                        # check that a modulator is ON
+                        if any(self.get_substate(self.modulation["modulators"])):
                             para.update(
                                 {
-                                    self.modulation['parameter']: 
-                                    self.modulation['function'](para[self.modulation['parameter']])
+                                    self.modulation["parameter"]: self.modulation[
+                                        "function"
+                                    ](para[self.modulation["parameter"]])
                                 }
                             )
                         # if params include a specification of a unit
                         func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
                         modulated_tpm = func(self, **para)
-                        
+
                         # add modulators to unit inputs
-                        modulators = self.modulation['modulators']
-                        self.set_inputs(self.inputs+tuple([m for m in modulators if not m in self.inputs]))
-                        
+                        modulators = self.modulation["modulators"]
+                        self.set_inputs(
+                            self.inputs
+                            + tuple([m for m in modulators if not m in self.inputs])
+                        )
+
                         # create a tpm that includes the modulators as inputs
-                        mod_ixs = [i for i,ix in enumerate(self.inputs) if ix in modulators]
-                        true_inputs = tuple([i for i,ix in enumerate(self.inputs) if ix not in modulators])
+                        mod_ixs = [
+                            i for i, ix in enumerate(self.inputs) if ix in modulators
+                        ]
+                        true_inputs = tuple(
+                            [
+                                i
+                                for i, ix in enumerate(self.inputs)
+                                if ix not in modulators
+                            ]
+                        )
                         updated_tpm = []
                         for in_state in pyphi.utils.all_states(len(self.inputs)):
                             mod_ON = any([in_state[i] for i in mod_ixs])
@@ -330,17 +378,17 @@ class Unit:
                                 prob = modulated_tpm[true_input_state]
                             else:
                                 prob = tpm[true_input_state]
-                            
-                            if type(prob)==np.ndarray:
+
+                            if type(prob) == np.ndarray:
                                 # this happens when self is in the true inputs
                                 updated_tpm.append([prob[0]])
                             else:
                                 updated_tpm.append([prob])
-                                
+
                         self.tpm = reshape_to_md(updated_tpm)
                         print(self.tpm.shape)
                         print(self.inputs)
-                    
+
                 else:
                     # if params include a specification of a unit
                     func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
@@ -399,13 +447,8 @@ class Unit:
         self.type = type_description
 
     def get_substate(self, unit_indices):
-            
-        return tuple(
-            [
-                self.substrate_state[i]
-                for i in unit_indices
-            ]
-        )
+
+        return tuple([self.substrate_state[i] for i in unit_indices])
 
     # TODO do we need more than the index?
     def to_json(self):
@@ -448,17 +491,17 @@ class CompositeUnit:
         mechanism_combination=None,
         substrate_state=None,
         substrate_indices=None,
-        modulation=None
+        modulation=None,
     ):
 
         # Construct Units for each of the subunits constituting the CompositeUnit
-        if input_state==None:
-            input_state = [input_state]*len(inputs)
-        if modulation==None:
-            modulation = [modulation]*len(inputs)
-        if substrate_state==None and substrate_indices==None:
-            substrate_indices = range(max([i for ix in inputs for i in ix])+1)
-            
+        if input_state == None:
+            input_state = [input_state] * len(inputs)
+        if modulation == None:
+            modulation = [modulation] * len(inputs)
+        if substrate_state == None and substrate_indices == None:
+            substrate_indices = range(max([i for ix in inputs for i in ix]) + 1)
+
         units = [
             Unit(
                 index,
@@ -469,9 +512,11 @@ class CompositeUnit:
                 input_state=input_s,
                 substrate_state=substrate_state,
                 substrate_indices=substrate_indices,
-                modulation=mod
+                modulation=mod,
             )
-            for input_ixs, input_s, param, mod in zip(inputs, input_state, params, modulation)
+            for input_ixs, input_s, param, mod in zip(
+                inputs, input_state, params, modulation
+            )
         ]
         self.units = units
 
@@ -479,14 +524,16 @@ class CompositeUnit:
         # update self.inputs to include modulators, if modulation is virtual
         all_inputs = []
         for in_ix, mod in zip(inputs, modulation):
-            if not mod==None and mod['type']=='virtual':
-                all_inputs.append(in_ix+tuple([m for m in mod['modulators'] if m not in in_ix]))
+            if not mod == None and mod["type"] == "virtual":
+                all_inputs.append(
+                    in_ix + tuple([m for m in mod["modulators"] if m not in in_ix])
+                )
             else:
                 all_inputs.append(in_ix)
-                
+
         self.inputs = all_inputs
         self.modulation = modulation
-        
+
         self.substrate_state = units[0].substrate_state
         self.substrate_indices = units[0].substrate_indices
 
@@ -515,12 +562,11 @@ class CompositeUnit:
             tpm=composite_tpm,
             substrate_state=substrate_state,
             substrate_indices=substrate_indices,
-            modulation=modulation
+            modulation=modulation,
         )
         self.Unit.set_type(self.__repr__())
 
         self.tpm = self.Unit.tpm
-
 
     def __repr__(self):
         return "CompositeUnit(type={}, label={}, state={})".format(
@@ -580,7 +626,7 @@ class CompositeUnit:
         elif type(mechanism_combination) == np.ndarray:
             # if specification is explicit as a TPM, it is just set as is
             self.mechanism_combination = mechanism_combination
-            
+
         elif type(mechanism_combination) == str:
             # if specification is explicit as a TPM, it is just set as is
             self.mechanism_combination = mechanism_combination
@@ -615,9 +661,7 @@ class CompositeUnit:
             turning ON, given the possible activations of the subunits.
             """
 
-            for state in MECHANISM_ACTIVATIONS:
-                
-                unit_activation = np.sum(
+            unit_activation = np.sum(
                 [
                     np.prod(
                         [
@@ -629,12 +673,14 @@ class CompositeUnit:
                     for state in MECHANISM_ACTIVATIONS
                 ]
             )
-                
+
             return unit_activation
 
         # Expand all TPMs to be the length of the unit's full set of inputs
-        #all_inputs = sorted(tuple(set([i for indices in self.inputs for i in indices])))
-        all_inputs = self.composite_inputs(self.units)#tuple(sorted(set([i for indices in self.inputs for i in indices]))) composite
+        # all_inputs = sorted(tuple(set([i for indices in self.inputs for i in indices])))
+        all_inputs = self.composite_inputs(
+            self.units
+        )  # tuple(sorted(set([i for indices in self.inputs for i in indices]))) composite
         all_input_states = list(pyphi.utils.all_states(len(all_inputs)))
 
         expanded_tpms = []
@@ -671,102 +717,85 @@ class CompositeUnit:
                 )
             )
         else:
-            
+
             # here we can add specific cases of "string specified unit combinations" that do not adhere to the above logic of using another TPM to combine them
             # For example, we can have one where the Unit matches the output of the "strongest" subunit.
             if self.mechanism_combination == "selective":
+
                 def get_selective(P):
-                    Q = np.array([np.abs(p-0.5) for p in P])
+                    Q = np.array([np.abs(p - 0.5) for p in P])
                     return P[np.argmax(Q)]
-                    
+
                 tpm = reshape_to_md(
                     np.array(
                         [
-                            [
-                                get_selective(
-                                    activation_probabilities
-                                )
-                            ]
+                            [get_selective(activation_probabilities)]
                             for activation_probabilities in expanded_tpms
                         ]
                     )
                 )
             elif self.mechanism_combination == "average":
-                    
+
                 tpm = reshape_to_md(
                     np.array(
                         [
-                            [
-                                np.mean(
-                                    activation_probabilities
-                                )
-                            ]
+                            [np.mean(activation_probabilities)]
                             for activation_probabilities in expanded_tpms
                         ]
                     )
                 )
             elif self.mechanism_combination == "maximal":
-                    
+
                 tpm = reshape_to_md(
                     np.array(
                         [
-                            [
-                                np.max(
-                                    activation_probabilities
-                                )
-                            ]
+                            [np.max(activation_probabilities)]
                             for activation_probabilities in expanded_tpms
                         ]
                     )
                 )
             elif self.mechanism_combination == "first_necessary":
+
                 def first_necessary(ap):
                     # non-primary units boost activation probability as a function of the primary unit's activation probability
                     primary = ap[0]
 
-                    if primary>0.5:    
-                        non_primary = np.prod([1-p for p in ap[1:]])
-                        max_boost = 1-primary
-                        boost = max_boost / (1 + np.e ** (-5 * (1-non_primary - 0.5)))
+                    if primary > 0.5:
+                        non_primary = np.prod([1 - p for p in ap[1:]])
+                        max_boost = 1 - primary
+                        boost = max_boost / (1 + np.e ** (-5 * (1 - non_primary - 0.5)))
                         return primary + boost
                     else:
                         return primary
+
                 tpm = reshape_to_md(
                     np.array(
                         [
-                            [
-                                (
-                                    first_necessary(activation_probabilities)
-                                )
-                            ]
+                            [(first_necessary(activation_probabilities))]
                             for activation_probabilities in expanded_tpms
                         ]
                     )
                 )
             elif self.mechanism_combination == "integrator":
-                def get_cumulated_probability(
-                                    activation_probabilities
-                                ):
+
+                def get_cumulated_probability(activation_probabilities):
                     cumsum = np.sum(activation_probabilities)
-                    if cumsum>1.0:
+                    if cumsum > 1.0:
                         return 1.0
-                    elif cumsum<0.0:
+                    elif cumsum < 0.0:
                         return 0.0
                     else:
                         return cumsum
+
                 tpm = reshape_to_md(
                     np.array(
                         [
-                            [
-                                get_cumulated_probability(
-                                    activation_probabilities
-                                )
-                            ]
+                            [get_cumulated_probability(activation_probabilities)]
                             for activation_probabilities in expanded_tpms
                         ]
                     )
                 )
-        
+
         # set some final properties
         self.all_inputs = self.inputs * 1
         self.inputs = tuple(all_inputs)
@@ -779,15 +808,13 @@ class CompositeUnit:
             units (list[Unit]): all the units that constitute the composite unit.
 
         """
-        #inputs = sorted(tuple(set([ix for unit in units for ix in unit.inputs])))
-        #inputs = tuple(sorted(set([ix for unit in units for ix in unit.inputs])))
-        #inputs = tuple(set([ix for unit in units for ix in unit.inputs]))
+
         inputs = []
         for unit in units:
             for ix in unit.inputs:
                 if ix not in inputs:
                     inputs.append(ix)
-                    
+
         return tuple(inputs)
 
     def composite_input_state(self, units, input_states):
@@ -800,21 +827,21 @@ class CompositeUnit:
 
         # first get the IDs of units that input to subunits
         composite_inputs = self.composite_inputs(units)
-        
+
         # get/set the state of the inputs (the state recorded locally, by the unit)
         # TODO: consider whether subunits can have incongruent inputs from the same unit (noisy channels?)
-        
-        if any([i_s==None for i_s in input_states]):
+
+        if any([i_s == None for i_s in input_states]):
             input_state = self.get_subset_state(self.substrate_state, composite_inputs)
         else:
             states = dict()
             for unit, input_state in zip(units, input_states):
-                for i,i_s in zip(unit.inputs,input_state):
+                for i, i_s in zip(unit.inputs, input_state):
                     states[i] = i_s
-                    
+
             input_state = tuple([states[i] for i in composite_inputs])
 
-        '''
+        """
         # go through units to pick out their input states. If the same unit appears multiply, then the state is forced to be whichever state appeared first.
         input_unit_states = dict()
         for unit in units:
@@ -835,8 +862,8 @@ class CompositeUnit:
         input_state = tuple(
             [input_unit_states[input_unit] for input_unit in composite_inputs]
         )
-        '''
-        
+        """
+
         return input_state
 
     # THIS IS WRONG! IT DOES NOT GET THE RIGHT STATE BECAUSE IT DOESNT CARE ABOUT THE FULL SET OF INDICES
@@ -868,27 +895,27 @@ class Substrate:
         state (tuple)
     """
 
-    def __init__(self, units, state=None):
+    def __init__(self, units, state=None, explicit_tpm=True):
 
         # Set indices of the inputs.
         self.node_indices = tuple([unit.index for unit in units])
 
         # Node labels used in the system
         self.node_labels = tuple([unit.label for unit in units])
-        
+
         # set the state of the substrate
         self.state = state
 
         substrate_tpm = []
-        if self.state==None:
+        if self.state == None and explicit_tpm:
             # running through all possible substrate states
             for state in tqdm(list(pyphi.utils.all_states(len(units)))):
 
                 # setting auxillary substrate state
                 self.state = state
 
-                # check that the state of (state dependent) units
-                # and their inputs match the substrate state
+                # Force the state of (state dependent) units
+                # and their inputs to match the substrate state
                 units = self.validate_unit_states(units)
 
                 # Combine Unit TPMs to substrate TPM
@@ -900,7 +927,7 @@ class Substrate:
 
             # validating unit
             assert self.validate(), "Substrate did not pass validation"
-        
+
         else:
             # running through all possible substrate states
             for past_state in tqdm(list(pyphi.utils.all_states(len(units)))):
@@ -917,7 +944,9 @@ class Substrate:
 
             # validating unit
             assert self.validate(), "Substrate did not pass validation"
-        
+
+        self.tpm = self.tpm  # to check for issues due to rounding
+
         # storing the units
         self.units = units
 
@@ -947,24 +976,26 @@ class Substrate:
                         )
                     )"""
                     # redefining unit
-                    if unit.params['mechanism'] == 'composite':
+                    if unit.params["mechanism"] == "composite":
                         substrate_input_state = [
-                            self.get_subset_state(u.inputs) 
-                            for u in unit.params['CompositeUnit'].units
+                            self.get_subset_state(u.inputs)
+                            for u in unit.params["CompositeUnit"].units
                         ]
                         unit = CompositeUnit(
                             unit.index,
-                            unit.params['CompositeUnit'].all_inputs,
-                            params=unit.params['CompositeUnit'].params,
+                            unit.params["CompositeUnit"].all_inputs,
+                            params=unit.params["CompositeUnit"].params,
                             label=unit.label,
                             state=substrate_unit_state,
                             input_state=substrate_input_state,
                             substrate_state=self.state,
                             substrate_indices=self.node_indices,
-                            mechanism_combination=unit.params['CompositeUnit'].mechanism_combination,
-                            modulation=unit.params['CompositeUnit'].modulation,
+                            mechanism_combination=unit.params[
+                                "CompositeUnit"
+                            ].mechanism_combination,
+                            modulation=unit.params["CompositeUnit"].modulation,
                         ).Unit
-                        
+
                     else:
                         unit = Unit(
                             unit.index,
@@ -975,7 +1006,7 @@ class Substrate:
                             input_state=substrate_input_state,
                             substrate_state=self.state,
                             substrate_indices=self.node_indices,
-                            modulation=unit.modulation
+                            modulation=unit.modulation,
                         )
 
             new_units.append(unit)
@@ -996,7 +1027,7 @@ class Substrate:
 
     def __len__(self):
         return len(self.units)
-    
+
     def __eq__(self, other):
         """Return whether this node equals the other object.
 
@@ -1014,23 +1045,25 @@ class Substrate:
             and self.inputs == other.inputs
             and self.outputs == other.outputs
         )
-    
+
     def update_state(self, state):
         return Substrate(self.units, state=state)
-        
+
     def combine_unit_tpms(self, units, past_state):
-        
+
         unit_response = []
         # going through each unit to find its state-dependent activation probability
         for unit in units:
-            unit_response.append(float(unit.tpm[tuple([past_state[i] for i in unit.inputs])]))
-        '''# sorting the activation probability in an ascending order
+            unit_response.append(
+                float(unit.tpm[tuple([past_state[i] for i in unit.inputs])])
+            )
+        """# sorting the activation probability in an ascending order
         full_tpm = np.array(unit_response)
         substrate_tpm = []
         for ix in sorted(set(self.node_indices)):
             substrate_tpm.append(full_tpm[ix])
 
-        return substrate_tpm'''
+        return substrate_tpm"""
         return unit_response
 
     def create_cm(self, units):
@@ -1047,13 +1080,13 @@ class Substrate:
         return pyphi.network.Network(self.tpm, self.cm, self.node_labels)
 
     def get_subsystem(self, state=None, nodes=None):
-        if nodes==None:
+        if nodes == None:
             nodes = self.node_indices
         # make sure the substrate is state_specific
-        if state==None and not self.state==None:
+        if state == None and not self.state == None:
             return pyphi.subsystem.Subsystem(self.get_network(), self.state, nodes)
-        elif not state==None:
-            print('remaking substrate to enforce correct state dependence')
+        elif not state == None:
+            print("remaking substrate to enforce correct state dependence")
             substrate = self.update_state(state)
             return pyphi.subsystem.Subsystem(substrate.get_network(), state, nodes)
 
@@ -1065,12 +1098,12 @@ class Substrate:
         gr.graph["params"] = "test"
 
         return gr
-        
+
     def plot_model(self, state=None):
-        
+
         gr = self.get_model(state=None)
         nodes = gr.nodes
-        
+
         if state == None:
             state = (1,) * len(self.node_indices)
 
@@ -1082,30 +1115,32 @@ class Substrate:
             node_color=["blue" if state[s] == 1 else "gray" for s in nodes],
         )
         plt.show()
-        
-    def simulate(self,initial_state=None,timesteps=1000, clamp=False, evoked=False):
-        
+
+    def simulate(self, initial_state=None, timesteps=1000, clamp=False, evoked=False):
+
         rng = np.random.default_rng(0)
-        if not clamp: 
+        if not clamp:
             # Just simulating from initial state
-            if initial_state==None:
-                initial_state = tuple(rng.integers(0,2,len(self)))
+            if initial_state == None:
+                initial_state = tuple(rng.integers(0, 2, len(self)))
             states = [initial_state]
             for t in range(timesteps):
                 P_next = self.tpm[states[-1]]
                 comparison = rng.random(len(initial_state))
-                states.append(tuple([1 if P>c else 0 for P,c in zip(P_next, comparison)]))
+                states.append(
+                    tuple([1 if P > c else 0 for P, c in zip(P_next, comparison)])
+                )
 
         else:
             # simulating with some units clamped to a state
             clamped_ix = list(clamp.keys())[0]
             clamped_state = list(clamp.values())[0]
             if not evoked:
-                
-                if initial_state==None:
-                    initial_state = list(rng.integers(0,2,len(self)))
-                    
-                for ix,s in zip(clamped_ix, clamped_state):
+
+                if initial_state == None:
+                    initial_state = list(rng.integers(0, 2, len(self)))
+
+                for ix, s in zip(clamped_ix, clamped_state):
                     initial_state[ix] = s
                 states = [tuple(initial_state)]
 
@@ -1113,16 +1148,18 @@ class Substrate:
                     P_next = self.tpm[states[-1]]
                     comparison = rng.random(len(initial_state))
 
-                    state = [1 if P>c else 0 for P,c in zip(P_next, comparison)]
-                    for ix,s in zip(clamped_ix, clamped_state):
+                    state = [1 if P > c else 0 for P, c in zip(P_next, comparison)]
+                    for ix, s in zip(clamped_ix, clamped_state):
                         state[ix] = s
                     states.append(tuple(state))
-            elif type(evoked)==int:
-                
+            elif type(evoked) == int:
+
                 states = []
-                for initial_state in tqdm(list(pyphi.utils.all_states(len(self)-len(clamped_ix)))):
+                for initial_state in tqdm(
+                    list(pyphi.utils.all_states(len(self) - len(clamped_ix)))
+                ):
                     initial_state = list(initial_state)
-                    for i,s in zip(clamped_ix, clamped_state):
+                    for i, s in zip(clamped_ix, clamped_state):
                         initial_state.insert(i, s)
                     trial = [tuple(initial_state)]
 
@@ -1130,19 +1167,21 @@ class Substrate:
                         P_next = self.tpm[trial[-1]]
                         comparison = rng.random(len(initial_state))
 
-                        state = [1 if P>c else 0 for P,c in zip(P_next, comparison)]
-                        if t<evoked:
-                            for ix,s in zip(clamped_ix, clamped_state):
+                        state = [1 if P > c else 0 for P, c in zip(P_next, comparison)]
+                        if t < evoked:
+                            for ix, s in zip(clamped_ix, clamped_state):
                                 state[ix] = s
                         trial.append(tuple(state))
-                    
+
                     states.append(trial)
             else:
-                
+
                 states = []
-                for initial_state in tqdm(list(pyphi.utils.all_states(len(self)-len(clamped_ix)))):
+                for initial_state in tqdm(
+                    list(pyphi.utils.all_states(len(self) - len(clamped_ix)))
+                ):
                     initial_state = list(initial_state)
-                    for i,s in zip(clamped_ix, clamped_state):
+                    for i, s in zip(clamped_ix, clamped_state):
                         initial_state.insert(i, s)
                     trial = [tuple(initial_state)]
 
@@ -1150,14 +1189,13 @@ class Substrate:
                         P_next = self.tpm[trial[-1]]
                         comparison = rng.random(len(initial_state))
 
-                        state = [1 if P>c else 0 for P,c in zip(P_next, comparison)]
-                        for ix,s in zip(clamped_ix, clamped_state):
+                        state = [1 if P > c else 0 for P, c in zip(P_next, comparison)]
+                        for ix, s in zip(clamped_ix, clamped_state):
                             state[ix] = s
                         trial.append(tuple(state))
-                    
+
                     states.append(trial)
-                
-            
+
         return states
 
     # TODO do we need more than the index?
