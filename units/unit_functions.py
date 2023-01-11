@@ -17,9 +17,12 @@ def sigmoid(
     threshold=None,
     floor=None,
     ceiling=None,
+    ising=True,
 ):
     def LogFunc(state, input_weights, determinism, threshold):
 
+        if ising:
+            state = tuple([s * 2 - 1 for s in state])
         total_input = sum(state * np.array([input_weights[n] for n in range(n_nodes)]))
         y = ceiling * (
             floor
@@ -90,6 +93,8 @@ def sor_gate(
         tpm[state] = pattern
     if unit.input_state in pattern_selection:
         tpm[unit.input_state] = ceiling
+    else:
+        tpm[unit.input_state] = 0.0
 
     return tpm
 

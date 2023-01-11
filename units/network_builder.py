@@ -1,5 +1,9 @@
 """
 TODO:
+- REFACTOR to a atom -> unit -> substrate structure
+-- atoms take N input states and transforms them to (the same) N outputs
+-- units are combinations of M>=1 atoms
+-- substrates are combinations of Q>=1 units
 - CHANGE THE COMPOSITE UNIT TO JUST TAKE A LIST OF UNITS AND COMBINE THEM (but how?!)
 - FIGURE OUT WEIRD PROBABILITIES
 - consider making the CompositeUnit somehow also an instance of the Unit. Just a special case?
@@ -31,7 +35,12 @@ UNIT_VALIDATION = {
     ),
     "sigmoid": dict(
         default_params=dict(
-            input_weights=[], determinism=4, threshold=0.5, floor=0.0, ceiling=1.0
+            input_weights=[],
+            determinism=4,
+            threshold=0.5,
+            floor=0.0,
+            ceiling=1.0,
+            ising=True,
         ),
         function=sigmoid,
     ),
@@ -895,7 +904,7 @@ class Substrate:
         state (tuple)
     """
 
-    def __init__(self, units, state=None, explicit_tpm=True):
+    def __init__(self, units, state=None, all_tpm=True):
 
         # Set indices of the inputs.
         self.node_indices = tuple([unit.index for unit in units])
@@ -903,9 +912,47 @@ class Substrate:
         # Node labels used in the system
         self.node_labels = tuple([unit.label for unit in units])
 
+        dynamic_tpm = []
+        self.all_tpm = dict()
+        # running through all possible substrate states
+        for present_state in tqdm(list(pyphi.utils.all_states(len(units)))):
+
+            # setting auxillary substrate state
+            self.state = present_state
+
+            # Force the state of (state dependent) units
+            # and their inputs to match the substrate state
+            units = self.validate_unit_states(units)
+
+            # running through all possible substrate states
+            substrate_tpm = []
+            if state == present_state or all_tpm:
+                for past_state in list(pyphi.utils.all_states(len(units))):
+
+                    # Combine Unit TPMs to substrate TPM
+                    # adding relevant row from the matrix to the substrate tpm
+                    substrate_tpm.append(self.combine_unit_tpms(units, past_state))
+
+                self.all_tpm[present_state] = reshape_to_md(np.array(substrate_tpm))
+
+            # Force the state of (state dependent) units
+            # and their inputs to match the substrate state
+            units = self.validate_unit_states(units)
+
+            # Combine Unit TPMs to substrate TPM
+            # adding relevant row from the matrix to the substrate tpm
+            dynamic_tpm.append(self.combine_unit_tpms(units, present_state))
+
+        self.dynamic_tpm = reshape_to_md(np.array(dynamic_tpm))
+
         # set the state of the substrate
         self.state = state
 
+        self.tpm = (
+            state if state == None else self.all_tpm[state]
+        )  # to check for issues due to rounding
+
+        """
         substrate_tpm = []
         if self.state == None and explicit_tpm:
             # running through all possible substrate states
@@ -946,7 +993,7 @@ class Substrate:
             assert self.validate(), "Substrate did not pass validation"
 
         self.tpm = self.tpm  # to check for issues due to rounding
-
+        """
         # storing the units
         self.units = units
 
@@ -1076,19 +1123,45 @@ class Substrate:
 
         return
 
+    def set_dynamic_tpm(self):
+
+        orig_state = self.state
+        dynamic_tpm = np.ndarray(self.tpm.shape)
+
+        for state in pyphi.utils.all_states(len(self)):
+            self.update_state(state)
+            dynamic_tpm[state] = self.tpm[state]
+
+        self.update_state(orig_state)
+        self.dynamic_tpm = dynamic_tpm
+
     def get_network(self):
-        return pyphi.network.Network(self.tpm, self.cm, self.node_labels)
+        if self.state == None:
+            return pyphi.network.Network(self.dynamic_tpm, self.cm, self.node_labels)
+        else:
+            return pyphi.network.Network(self.tpm, self.cm, self.node_labels)
 
     def get_subsystem(self, state=None, nodes=None):
         if nodes == None:
             nodes = self.node_indices
+
         # make sure the substrate is state_specific
         if state == None and not self.state == None:
             return pyphi.subsystem.Subsystem(self.get_network(), self.state, nodes)
         elif not state == None:
-            print("remaking substrate to enforce correct state dependence")
-            substrate = self.update_state(state)
-            return pyphi.subsystem.Subsystem(substrate.get_network(), state, nodes)
+
+            if state in self.all_tpm:
+                return pyphi.subsystem.Subsystem(
+                    pyphi.network.Network(
+                        self.all_tpm[state], self.cm, self.node_labels
+                    ),
+                    state,
+                    nodes,
+                )
+            else:
+                print("remaking substrate to enforce correct state dependence")
+                substrate = self.update_state(state)
+                return pyphi.subsystem.Subsystem(substrate.get_network(), state, nodes)
 
     def get_model(self, state=None):
         rows, cols = np.where(self.cm == 1)
@@ -1125,7 +1198,7 @@ class Substrate:
                 initial_state = tuple(rng.integers(0, 2, len(self)))
             states = [initial_state]
             for t in range(timesteps):
-                P_next = self.tpm[states[-1]]
+                P_next = self.dynamic_tpm[states[-1]]
                 comparison = rng.random(len(initial_state))
                 states.append(
                     tuple([1 if P > c else 0 for P, c in zip(P_next, comparison)])
@@ -1145,7 +1218,7 @@ class Substrate:
                 states = [tuple(initial_state)]
 
                 for t in range(timesteps):
-                    P_next = self.tpm[states[-1]]
+                    P_next = self.dynamic_tpm[states[-1]]
                     comparison = rng.random(len(initial_state))
 
                     state = [1 if P > c else 0 for P, c in zip(P_next, comparison)]
@@ -1164,7 +1237,7 @@ class Substrate:
                     trial = [tuple(initial_state)]
 
                     for t in range(timesteps):
-                        P_next = self.tpm[trial[-1]]
+                        P_next = self.dynamic_tpm[trial[-1]]
                         comparison = rng.random(len(initial_state))
 
                         state = [1 if P > c else 0 for P, c in zip(P_next, comparison)]
@@ -1186,7 +1259,7 @@ class Substrate:
                     trial = [tuple(initial_state)]
 
                     for t in range(timesteps):
-                        P_next = self.tpm[trial[-1]]
+                        P_next = self.dynamic_tpm[trial[-1]]
                         comparison = rng.random(len(initial_state))
 
                         state = [1 if P > c else 0 for P, c in zip(P_next, comparison)]
