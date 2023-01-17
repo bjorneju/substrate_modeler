@@ -44,6 +44,16 @@ UNIT_VALIDATION = {
         ),
         function=sigmoid,
     ),
+    "resonnator": dict(
+        default_params=dict(
+            input_weights=[],
+            determinism=4,
+            threshold=0.5,
+            floor=0.0,
+            ceiling=1.0,
+        ),
+        function=resonnator,
+    ),
     "sor": dict(
         default_params=dict(
             pattern_selection=[], selectivity=10, floor=0.0, ceiling=1.0
