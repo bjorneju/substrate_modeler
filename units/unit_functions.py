@@ -99,6 +99,70 @@ def sor_gate(
     return tpm
 
 
+def resonnator(
+    unit,
+    i=0,
+    input_weights=None,
+    determinism=None,
+    threshold=None,
+    floor=None,
+    ceiling=None,
+):
+
+    # Ensure nceiling is not more than 1
+    if ceiling > 1:
+        ceiling = 1.0
+
+    # Ensure unit has input state
+    if unit.input_state == None:
+        print(
+            "input state not given for {} unit {}. Setting to all off.".format(
+                unit.params["mechanism"], unit.label
+            )
+        )
+        unit.set_input_state((0,) * len(unit.inputs))
+
+    # Ensure unit has state
+    if unit.state == None:
+        print("State not given unit {}. Setting to off.".format(unit.label))
+        unit.set_state((0,))
+
+    # the tpm is uniform for all states except the input state (i.e. short term plasticity)
+    tpm = np.ones([2] * (len(unit.input_state))) * floor
+
+    # if the input state matches a pattern in the patternselction, activation probability given that state is ceiling, otherwise, it is increased by a fraction of the difference between floor and ceiling (given by selectivity)
+
+    n_nodes = len(input_weights)
+    unit_state = unit.state[0]
+
+    # alter weight to make it push unit towards its state
+    w = [
+        input_weights[i] if s == unit_state else -input_weights[i]
+        for i, s in enumerate(unit.input_state)
+    ]
+
+    def resonnatorFunc(state, input_weights, determinism, threshold, unit_state):
+        # make state interpreted as ising
+        state = [2 * s - 1 for s in state]
+
+        total_input = sum(state * np.array([w[n] for n in range(n_nodes)]))
+        y = 1 / (1 + np.e ** (-determinism * (total_input - threshold)))
+        return y
+
+    # producing transition probability matrix
+    tpm = np.array(
+        [
+            [resonnatorFunc(state, input_weights, determinism, threshold, unit_state)]
+            for state in pyphi.utils.all_states(n_nodes)
+        ]
+    )
+
+    # make it between floor and ceiling
+    tpm = tpm * (ceiling - floor) + floor
+
+    return tpm.reshape([2] * n_nodes + [1], order="F").astype(float)
+
+
 def mismatch_pattern_detector(
     unit, i=0, pattern_selection=None, selectivity=None, floor=None, ceiling=None
 ):
