@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from units.unit_functions import *
 
-""" 
+"""
     LOCAL VARIABLES, used to validate the objects created.
 """
 
@@ -920,7 +920,9 @@ class Substrate:
         self.node_indices = tuple([unit.index for unit in units])
 
         # Node labels used in the system
-        self.node_labels = tuple([unit.label for unit in units])
+        self.node_labels = pyphi.labels.NodeLabels(
+            [unit.label for unit in units], self.node_indices
+        )
 
         dynamic_tpm = []
         self.all_tpm = dict()
