@@ -105,6 +105,7 @@ def resonnator(
     input_weights=None,
     determinism=None,
     threshold=None,
+    weight_scale_mapping=None,
     floor=None,
     ceiling=None,
 ):
@@ -135,9 +136,11 @@ def resonnator(
     n_nodes = len(input_weights)
     unit_state = unit.state[0]
 
-    # alter weight to make it push unit towards its state
+    # alter weight to make it push unit towards its state, weighted using weight_scale_mapping
     w = [
-        input_weights[i] if s == unit_state else -input_weights[i]
+        input_weights[i] * weight_scale_mapping[(unit_state, s)]
+        if s == unit_state
+        else -input_weights[i] * weight_scale_mapping[(unit_state, s)]
         for i, s in enumerate(unit.input_state)
     ]
 

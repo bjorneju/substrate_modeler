@@ -49,6 +49,7 @@ UNIT_VALIDATION = {
             input_weights=[],
             determinism=4,
             threshold=0.5,
+            weight_scale_mapping=dict(),
             floor=0.0,
             ceiling=1.0,
         ),
