@@ -1,32 +1,30 @@
-"""
-TODO:
-- REFACTOR to a atom -> unit -> substrate structure
--- atoms take N input states and transforms them to (the same) N outputs
--- units are combinations of M>=1 atoms
--- substrates are combinations of Q>=1 units
-- CHANGE THE COMPOSITE UNIT TO JUST TAKE A LIST OF UNITS AND COMBINE THEM (but how?!)
-- FIGURE OUT WEIRD PROBABILITIES
-- consider making the CompositeUnit somehow also an instance of the Unit. Just a special case?
-- consider how to make MechanismCombination dependent on the probabilities
-- write validate function
-- put validate function in pyphi
-- document functions
-- allow for sending in function
-"""
+# TODO:
+# - REFACTOR to a atom -> unit -> substrate structure
+# -- atoms take N input states and transforms them to (the same) N outputs
+# -- units are combinations of M>=1 atoms
+# -- substrates are combinations of Q>=1 units
+# - CHANGE THE COMPOSITE UNIT TO JUST TAKE A LIST OF UNITS AND COMBINE THEM (but how?!)
+# - FIGURE OUT WEIRD PROBABILITIES
+# - consider making the CompositeUnit somehow also an instance of the Unit. Just a special case?
+# - consider how to make MechanismCombination dependent on the probabilities
+# - write validate function
+# - put validate function in pyphi
+# - document functions
+# - allow for sending in function
 
 import numpy as np
-import pandas as pd
-import string
+from copy import deepcopy
 import pyphi
 import networkx as nx
 import matplotlib.pyplot as plt
 
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from units.unit_functions import *
 
-"""
-    LOCAL VARIABLES, used to validate the objects created.
-"""
+# LOCAL VARIABLES, used to validate the objects created.
+
+
+PROGRESS_BAR_THRESHOLD = 2**10
 
 UNIT_VALIDATION = {
     "gabor": dict(
@@ -80,7 +78,8 @@ UNIT_VALIDATION = {
     ),
     "majority": dict(default_params=dict(floor=None, ceiling=None), function=majority),
     "mismatch_corrector": dict(
-        default_params=dict(floor=0.0, ceiling=1.0), function=mismatch_corrector
+        default_params=dict(floor=0.0, ceiling=1.0, bias=0.0),
+        function=mismatch_corrector,
     ),
     "modulated_sigmoid": dict(
         default_params=dict(
@@ -126,28 +125,45 @@ def reshape_to_md(tpm):
         return pyphi.convert.to_md(tpm)
 
 
+class AllTPMDict(dict):
+    def __init__(self, unit):
+        self.unit = unit
+    
+    def __missing__(self, state):
+        # probably dont need to store this at all
+        #self[state] = 
+        value = self.yield_tpm(state)
+        return value
+    
+    def yield_tpm(self, state):
+        u_state = (state[self.unit.index],)
+        i_state = tuple([state[i] for i in self.unit.inputs])
+        return self.unit.all_unit_tpm[(u_state, i_state)]
+
+
 class Unit:
     """A unit that can constitute a substrate.
 
-    Represents the unit and holds auxilary data about it to construct a substrate.
+    Represents the unit and holds auxilary data about it to construct a
+    substrate.
 
     Args:
         index (int): Integer identifier of the unit.
-
-        inputs (tuple[int]): A tuple of integers specifying the identities of the units providing iniputs.
+        inputs (tuple[int]): A tuple of integers specifying the identities of
+            the units providing iniputs.
 
     Keyword Args:
-        params (dict or np.ndarray): Contains a specification of the mechanism of the unit. Given either explicitly by a TPM (ndarray) or implicitly as specifications in a dict. The supported unit tpyes can be found in the UNIT_VALIDATION object.
-
+        params (dict or np.ndarray): Contains a specification of the mechanism
+            of the unit. Given either explicitly by a TPM (ndarray) or implicitly as
+            specifications in a dict. The supported unit tpyes can be found in the
+            UNIT_VALIDATION object.
         label (str): Human readable name for the unit
-
-        state (int): Indicates the current state of the unit: 1 means it is ON, 0 OFF. For now, only binary units are supported.
-
-        input_state (tuple[int]): Binary tuple (consisting of 1s and 0s) that indicates the current state of the inputs. This should be understood as the state of the inputs to the unit, and not the past state of the units that provide input to the unit.
-
-
-    Example:
-        .
+        state (int): Indicates the current state of the unit: 1 means it is ON,
+            0 OFF. For now, only binary units are supported.
+        input_state (tuple[int]): Binary tuple (consisting of 1s and 0s) that
+            indicates the current state of the inputs. This should be understood
+            as the state of the inputs to the unit, and not the past state of
+            the units that provide input to the unit.
     """
 
     def __init__(
@@ -162,6 +178,8 @@ class Unit:
         substrate_state=None,
         substrate_indices=None,
         modulation=None,
+        all_tpm=False,
+        inherited_tpm=False,
     ):
         # Storing the parameters
         self.params = params
@@ -170,7 +188,7 @@ class Unit:
         self.modulation = modulation
 
         # Store the type of unit
-        if not type(tpm) == np.ndarray:
+        if not (type(tpm) == np.ndarray or type(params) == np.ndarray):
             self.type = params["mechanism"]
         else:
             self.type = "TPM"
@@ -181,7 +199,7 @@ class Unit:
         # List of indices that input to the unit (one pr mechanism).
         self.inputs = tuple(inputs)
 
-        # sset substrate indices and state
+        # set substrate indices and state
         self.substrate_indices = (
             tuple(range(np.max((index,) + tuple(inputs)) + 1))
             if substrate_indices == None
@@ -224,6 +242,12 @@ class Unit:
             self.set_unit_tpm()
         else:
             self.tpm = tpm
+
+        # store all possible Unit tpms
+        if all_tpm and not inherited_tpm:
+            self.get_all_tpms()
+        elif all_tpm:
+            self.all_tpm = inherited_tpm
 
     def validate(self):
         """Return whether the specifications for the unit are valid.
@@ -275,144 +299,192 @@ class Unit:
             and self.outputs == other.outputs
         )
 
+    def __copy__(self):
+        return Unit(
+            self.index,
+            self.inputs,
+            params=self.params,
+            label=self.label,
+            state=self.state,
+            input_state=self.input_state,
+            tpm=self.tpm,
+            substrate_state=self.substrate_state,
+            substrate_indices=self.substrate_indices,
+            modulation=self.modulation,
+        )
+
+    def get_all_tpms(self):
+
+        orig_unit_state = self.state
+        orig_input_state = self.input_state
+        ixs = (self.index,) + self.inputs
+
+        self.all_unit_tpm = dict()
+        for u_state in pyphi.utils.all_states(1):
+            self.state = u_state
+            all_states = list(pyphi.utils.all_states(len(self.inputs)))
+            for i_state in all_states:
+                state = u_state + i_state
+                substate = tuple(
+                    [
+                        0 if i not in ixs else state[ixs.index(i)]
+                        for i in range(len(self.substrate_state))
+                    ]
+                )
+                self.input_state = i_state
+                self.set_unit_tpm(substate)
+                self.all_unit_tpm[(u_state, i_state)] = self.tpm
+        self.input_unit_tpm = self.all_unit_tpm
+        
+        self.all_tpm = AllTPMDict(self)
+
+        '''
+        for s_state in pyphi.utils.all_states(len(self.substrate_state)):
+            u_state = (s_state[self.index],)
+            i_state = tuple([s_state[i] for i in self.inputs])
+            self.all_tpm[s_state] = self.all_unit_tpm[(u_state, i_state)]'''
+
+        self.state = orig_unit_state
+        self.input_state = orig_input_state
+
     def set_unit_tpm(self, substrate_state=None):
         """np.ndarray: The unit TPM.
 
         A multidimensional array, containing the probabilities for the unit
         turning ON, given the possible states of the inputs.
         """
+        if hasattr(self, 'all_tpm') and substrate_state in self.all_tpm:
+            self.tpm = self.all_tpm[substrate_state]
+        else:
+            if type(self.params) == np.ndarray:
+                # if params just include a TPM
+                self.tpm = self.params * 1.0
 
-        if type(self.params) == np.ndarray:
-            # if params just include a TPM
-            self.tpm = self.params * 1.0
+            elif type(self.params) == dict:
+                if self.params["mechanism"] == "composite":
+                    c_unit = self.params["CompositeUnit"]
+                    self.tpm = CompositeUnit(
+                        c_unit.index,
+                        c_unit.all_inputs,
+                        params=c_unit.params,
+                        label=c_unit.label,
+                        state=c_unit.state,
+                        input_state=c_unit.input_state,
+                        mechanism_combination=c_unit.mechanism_combination,
+                        substrate_state=self.substrate_state
+                        if substrate_state is None
+                        else substrate_state,
+                        substrate_indices=self.substrate_indices,
+                        modulation=self.modulation,
+                        all_tpm=False,
+                    ).tpm
+                    self.type = "Composite unit: {}".format(
+                        [unit.type for unit in c_unit.units]
+                    )
 
-        elif type(self.params) == dict:
-            if self.params["mechanism"] == "composite":
-                c_unit = self.params["CompositeUnit"]
-                self.tpm = CompositeUnit(
-                    c_unit.index,
-                    c_unit.all_inputs,
-                    params=c_unit.params,
-                    label=c_unit.label,
-                    state=c_unit.state,
-                    input_state=c_unit.input_state,
-                    mechanism_combination=c_unit.mechanism_combination,
-                    substrate_state=self.substrate_state
-                    if substrate_state == None
-                    else substrate_state,
-                    substrate_indices=self.substrate_indices,
-                    modulation=self.modulation,
-                ).tpm
-                self.type = "Composite unit: {}".format(
-                    [unit.type for unit in c_unit.units]
+                else:
+                    if (
+                        not self.modulation == None
+                        and not type(not self.modulation) == list
+                    ):
+                        if self.modulation["type"] == "actual":
+                            self.actual_modulation()
+
+                        elif self.modulation["type"] == "virtual":
+                            self.virtual_modulation()
+
+                    else:
+                        # if params include a specification of a unit
+                        func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
+                        self.tpm = func(self, **self.params["params"])
+
+    def actual_modulation(self):
+        para = self.params["params"].copy()
+
+        # check that a modulator is ON
+        if any(self.get_substate(self.modulation["modulators"])):
+
+            # check if modulation is state dependent
+            if type(self.modulation["function"]) == list:
+                # if it is state dependent, the list contains modulation for OFF on index 0, and modulation for ON on index 1
+                para.update(
+                    {
+                        self.modulation["parameter"]: self.modulation["function"][
+                            self.state[0]
+                        ](para[self.modulation["parameter"]])
+                    }
                 )
 
             else:
-                if (
-                    not self.modulation == None
-                    and not type(not self.modulation) == list
-                ):
-                    if self.modulation["type"] == "actual":
-                        para = self.params["params"].copy()
-
-                        # check that a modulator is ON
-                        if any(self.get_substate(self.modulation["modulators"])):
-
-                            # check if modulation is state dependent
-                            if type(self.modulation["function"]) == list:
-                                # if it is state dependent, the list contains modulation for OFF on index 0, and modulation for ON on index 1
-                                para.update(
-                                    {
-                                        self.modulation["parameter"]: self.modulation[
-                                            "function"
-                                        ][self.state[0]](
-                                            para[self.modulation["parameter"]]
-                                        )
-                                    }
-                                )
-
-                            else:
-                                para.update(
-                                    {
-                                        self.modulation["parameter"]: self.modulation[
-                                            "function"
-                                        ](para[self.modulation["parameter"]])
-                                    }
-                                )
-                        # if params include a specification of a unit
-                        func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
-                        self.tpm = func(self, **para)
-
-                    elif self.modulation["type"] == "virtual":
-
-                        print(
-                            "VIRTUAL MODULATION DOES NOT WORK. THERE ARE MISSHAPEN TPMS. CHECK reshape_to_md FUNCTION. THERE IS AN EXTRA DIMENSION AT THE END WHEN THE UNIT ITSELF IS IN THE INPUTS. BUT THIS SHOWS UP ALWAYS FOR VIRTUAL MODULATION"
+                para.update(
+                    {
+                        self.modulation["parameter"]: self.modulation["function"](
+                            para[self.modulation["parameter"]]
                         )
+                    }
+                )
+        # if params include a specification of a unit
+        func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
+        self.tpm = func(self, **para)
 
-                        # this means the modulator does not acually modulate the mechanism of the unit,
-                        # but rather acts as a separate input unit that "virtually" modulated the mechanism.
+    def virtual_modulation(self):
 
-                        # if params include a specification of a unit
-                        func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
-                        tpm = func(self, **self.params["params"])
+        print(
+            "VIRTUAL MODULATION DOES NOT WORK. THERE ARE MISSHAPEN TPMS. CHECK reshape_to_md FUNCTION. THERE IS AN EXTRA DIMENSION AT THE END WHEN THE UNIT ITSELF IS IN THE INPUTS. BUT THIS SHOWS UP ALWAYS FOR VIRTUAL MODULATION"
+        )
 
-                        # create the modulated tpm
-                        para = self.params["params"].copy()
+        # this means the modulator does not acually modulate the mechanism of the unit,
+        # but rather acts as a separate input unit that "virtually" modulated the mechanism.
 
-                        # check that a modulator is ON
-                        if any(self.get_substate(self.modulation["modulators"])):
-                            para.update(
-                                {
-                                    self.modulation["parameter"]: self.modulation[
-                                        "function"
-                                    ](para[self.modulation["parameter"]])
-                                }
-                            )
-                        # if params include a specification of a unit
-                        func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
-                        modulated_tpm = func(self, **para)
+        # if params include a specification of a unit
+        func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
+        tpm = func(self, **self.params["params"])
 
-                        # add modulators to unit inputs
-                        modulators = self.modulation["modulators"]
-                        self.set_inputs(
-                            self.inputs
-                            + tuple([m for m in modulators if not m in self.inputs])
-                        )
+        # create the modulated tpm
+        para = self.params["params"].copy()
 
-                        # create a tpm that includes the modulators as inputs
-                        mod_ixs = [
-                            i for i, ix in enumerate(self.inputs) if ix in modulators
-                        ]
-                        true_inputs = tuple(
-                            [
-                                i
-                                for i, ix in enumerate(self.inputs)
-                                if ix not in modulators
-                            ]
-                        )
-                        updated_tpm = []
-                        for in_state in pyphi.utils.all_states(len(self.inputs)):
-                            mod_ON = any([in_state[i] for i in mod_ixs])
-                            true_input_state = tuple([in_state[i] for i in true_inputs])
-                            if mod_ON:
-                                prob = modulated_tpm[true_input_state]
-                            else:
-                                prob = tpm[true_input_state]
+        # check that a modulator is ON
+        if any(self.get_substate(self.modulation["modulators"])):
+            para.update(
+                {
+                    self.modulation["parameter"]: self.modulation["function"](
+                        para[self.modulation["parameter"]]
+                    )
+                }
+            )
+        # if params include a specification of a unit
+        func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
+        modulated_tpm = func(self, **para)
 
-                            if type(prob) == np.ndarray:
-                                # this happens when self is in the true inputs
-                                updated_tpm.append([prob[0]])
-                            else:
-                                updated_tpm.append([prob])
+        # add modulators to unit inputs
+        modulators = self.modulation["modulators"]
+        self.set_inputs(
+            self.inputs + tuple([m for m in modulators if not m in self.inputs])
+        )
 
-                        self.tpm = reshape_to_md(updated_tpm)
-                        print(self.tpm.shape)
-                        print(self.inputs)
+        # create a tpm that includes the modulators as inputs
+        mod_ixs = [i for i, ix in enumerate(self.inputs) if ix in modulators]
+        true_inputs = tuple(
+            [i for i, ix in enumerate(self.inputs) if ix not in modulators]
+        )
+        updated_tpm = []
+        for in_state in pyphi.utils.all_states(len(self.inputs)):
+            mod_ON = any([in_state[i] for i in mod_ixs])
+            true_input_state = tuple([in_state[i] for i in true_inputs])
+            if mod_ON:
+                prob = modulated_tpm[true_input_state]
+            else:
+                prob = tpm[true_input_state]
 
-                else:
-                    # if params include a specification of a unit
-                    func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
-                    self.tpm = func(self, **self.params["params"])
+            if type(prob) == np.ndarray:
+                # this happens when self is in the true inputs
+                updated_tpm.append([prob[0]])
+            else:
+                updated_tpm.append([prob])
+
+        self.tpm = reshape_to_md(updated_tpm)
+        print(self.tpm.shape)
+        print(self.inputs)
 
     def set_input_state(self, state):
         """The current state of the inputs.
@@ -482,22 +554,29 @@ class CompositeUnit:
 
     Args:
         index (int): Integer identifier of the unit.
-
-        inputs (list[tuple[int]]): A list of tuples of integers specifying the identities of the units providing iniputs. The number of elements in the list must match the number of units the CompositeUnit is composed of.
+        inputs (list[tuple[int]]): A list of tuples of integers specifying the
+            identities of the units providing iniputs. The number of elements in
+            the list must match the number of units the CompositeUnit is
+            composed of.
 
     Keyword Args:
-        params (list[dict] or list[np.ndarray]): The list contains specifications of the mechanism of each of the subunits. Given either explicitly by a TPM (ndarray) or implicitly as specifications in a dict. The supported unit tpyes can be found in the UNIT_VALIDATION object.
-
+        params (list[dict] or list[np.ndarray]): The list contains
+            specifications of the mechanism of each of the subunits. Given
+            either explicitly by a TPM (ndarray) or implicitly as specifications
+            in a dict.  The supported unit tpyes can be found in the
+            UNIT_VALIDATION object.
         label (str): Human readable name for the unit
-
-        state (int): Indicates the current state of the unit: 1 means it is ON, 0 OFF. For now, only binary units are supported.
-
-        input_state (list[tuple[int]]): A list of binary tuples (consisting of 1s and 0s) that indicates the current state of the inputs to each of the subunits. This should be understood as the present state of the inputs to the subunit, and not the past state of the units that provide input to the unit.
-
-        mechanism_combination (list[dict] or list[np.ndarray]): Like the "params" kwarg. This kwarg provides the specifications for how the activations of the distinct subunits combine to yield an output for the CompositUnit as a whole.
-
-    Example:
-        .
+        state (int): Indicates the current state of the unit: 1 means it is ON,
+            0 OFF. For now, only binary units are supported.
+        input_state (list[tuple[int]]): A list of binary tuples (consisting of
+            1s and 0s) that indicates the current state of the inputs to each of the
+            subunits. This should be understood as the present state of the inputs
+            to the subunit, and not the past state of the units that provide input
+            to the unit.
+        mechanism_combination (list[dict] or list[np.ndarray]): Like the
+            "params" kwarg. This kwarg provides the specifications for how the
+            activations of the distinct subunits combine to yield an output for the
+            CompositUnit as a whole.
     """
 
     def __init__(
@@ -512,6 +591,7 @@ class CompositeUnit:
         substrate_state=None,
         substrate_indices=None,
         modulation=None,
+        all_tpm=False,
     ):
 
         # Construct Units for each of the subunits constituting the CompositeUnit
@@ -533,6 +613,7 @@ class CompositeUnit:
                 substrate_state=substrate_state,
                 substrate_indices=substrate_indices,
                 modulation=mod,
+                all_tpm=False,
             )
             for input_ixs, input_s, param, mod in zip(
                 inputs, input_state, params, modulation
@@ -583,6 +664,7 @@ class CompositeUnit:
             substrate_state=substrate_state,
             substrate_indices=substrate_indices,
             modulation=modulation,
+            all_tpm=all_tpm,
         )
         self.Unit.set_type(self.__repr__())
 
@@ -618,7 +700,9 @@ class CompositeUnit:
         """np.ndarray: The composite unit TPM.
 
         Args:
-            mechanism_combination (dict or np.ndarray): A specification of the way the composite unit should translate activations of its subunits into a single output from the composite unit.
+            mechanism_combination (dict or np.ndarray): A specification of the
+                way the composite unit should translate activations of its subunits
+                into a single output from the composite unit.
 
         A multidimensional array, containing the probabilities for the unit
         turning ON, given the possible activations of the subunits.
@@ -663,19 +747,26 @@ class CompositeUnit:
         turning ON, given the possible activations of the subunits.
         """
 
-        # getting all the possible states of the individual mechanisms constituting the unit
+        # getting all the possible states of the individual mechanisms
+        # constituting the unit
         MECHANISM_ACTIVATIONS = list(pyphi.utils.all_states(len(tpms)))
 
         # a local function that returns the unit activation given some state of its constituent mechanisms
         def combined_activation_probability(
             activation_probabilities, mechanism_combination
         ):
-            """the probability of the composite unit activating given the activation of subunits due to a particular input state.
-            Returns:
-                tpm (np.ndarray): The composite unit TPM, specifying the activation probability (probability to turn ON) given all possible input states.
+            """Return the probability of the composite unit activating given the
+            activation of subunits due to a particular input state.
 
             Args:
-                tpms (list[np.ndarray]): A specification of the way the composite unit should translate activations of its subunits into a single output from the composite unit.
+                tpms (list[np.ndarray]): A specification of the way the
+                    composite unit should translate activations of its subunits into
+                    a single output from the composite unit.
+
+            Returns:
+                tpm (np.ndarray): The composite unit TPM, specifying the
+                activation probability (probability to turn ON) given all
+                possible input states.
 
             A multidimensional array, containing the probabilities for the unit
             turning ON, given the possible activations of the subunits.
@@ -815,6 +906,22 @@ class CompositeUnit:
                         ]
                     )
                 )
+            elif self.mechanism_combination == "serial":
+
+                def serial_func(P):
+                    remainder = 1
+                    for p in P:
+                        remainder -= p * remainder
+                    return 1 - remainder
+
+                tpm = reshape_to_md(
+                    np.array(
+                        [
+                            [serial_func(activation_probabilities)]
+                            for activation_probabilities in expanded_tpms
+                        ]
+                    )
+                )
 
         # set some final properties
         self.all_inputs = self.inputs * 1
@@ -861,32 +968,30 @@ class CompositeUnit:
 
             input_state = tuple([states[i] for i in composite_inputs])
 
-        """
-        # go through units to pick out their input states. If the same unit appears multiply, then the state is forced to be whichever state appeared first.
-        input_unit_states = dict()
-        for unit in units:
-            for input_unit, input_state in zip(unit.inputs, unit.input_state):
-                if input_unit in input_unit_states:
-                    # check that input state of repeated unit is congruent
-                    if not input_unit_states[input_unit] == input_state:
-                        print(
-                            "incongruency in input state of unit {}, forcing state to {}".format(
-                                unit.label, input_unit_states[input_unit]
-                            )
-                        )
-                else:
-                    # storing the state of the input unit
-                    input_unit_states[input_unit] = input_state
+        # # go through units to pick out their input states. If the same unit appears multiply, then the state is forced to be whichever state appeared first.
+        # input_unit_states = dict()
+        # for unit in units:
+        #     for input_unit, input_state in zip(unit.inputs, unit.input_state):
+        #         if input_unit in input_unit_states:
+        #             # check that input state of repeated unit is congruent
+        #             if not input_unit_states[input_unit] == input_state:
+        #                 print(
+        #                     "incongruency in input state of unit {}, forcing state to {}".format(
+        #                         unit.label, input_unit_states[input_unit]
+        #                     )
+        #                 )
+        #         else:
+        #             # storing the state of the input unit
+        #             input_unit_states[input_unit] = input_state
 
-        # create the state tuple by looking through the dict constructed before
-        input_state = tuple(
-            [input_unit_states[input_unit] for input_unit in composite_inputs]
-        )
-        """
-
+        # # create the state tuple by looking through the dict constructed before
+        # input_state = tuple(
+        #     [input_unit_states[input_unit] for input_unit in composite_inputs]
+        # )
         return input_state
 
-    # THIS IS WRONG! IT DOES NOT GET THE RIGHT STATE BECAUSE IT DOESNT CARE ABOUT THE FULL SET OF INDICES
+    # THIS IS WRONG! IT DOES NOT GET THE RIGHT STATE BECAUSE IT DOESNT CARE
+    # ABOUT THE FULL SET OF INDICES
     def get_subset_state(self, state, subset_indices):
         """tuple[int (binary)]: the state of a subset of indices.
 
@@ -902,7 +1007,6 @@ class CompositeUnit:
         return self.index
 
 
-### SUBSTRATES
 class Substrate:
     """A model of a substrate, constituted of units
 
@@ -915,7 +1019,15 @@ class Substrate:
         state (tuple)
     """
 
-    def __init__(self, units, state=None, all_tpm=True):
+    def __init__(
+        self, units: list[Unit], state: tuple[int] = None, all_tpm: bool = False
+    ):
+
+        # store units
+        self.units = units
+
+        # set the state of the substrate
+        self.set_state(state)
 
         # Set indices of the inputs.
         self.node_indices = tuple([unit.index for unit in units])
@@ -925,89 +1037,56 @@ class Substrate:
             [unit.label for unit in units], self.node_indices
         )
 
-        dynamic_tpm = []
         self.all_tpm = dict()
-        # running through all possible substrate states
-        for present_state in tqdm(list(pyphi.utils.all_states(len(units)))):
+        if all_tpm:
+            self.set_all_tpms()
 
-            # setting auxillary substrate state
-            self.state = present_state
+        self.set_tpm(state)
 
-            # Force the state of (state dependent) units
-            # and their inputs to match the substrate state
-            units = self.validate_unit_states(units)
+        self.dynamic_tpm = self.get_dynamic_tpm()
 
-            # running through all possible substrate states
-            substrate_tpm = []
-            if state == present_state or all_tpm:
-                for past_state in list(pyphi.utils.all_states(len(units))):
+        # substrate_tpm = []
+        # if self.state == None and explicit_tpm:
+        #     # running through all possible substrate states
+        #     for state in tqdm(list(pyphi.utils.all_states(len(units)))):
 
-                    # Combine Unit TPMs to substrate TPM
-                    # adding relevant row from the matrix to the substrate tpm
-                    substrate_tpm.append(self.combine_unit_tpms(units, past_state))
+        #         # setting auxillary substrate state
+        #         self.state = state
 
-                self.all_tpm[present_state] = reshape_to_md(np.array(substrate_tpm))
+        #         # Force the state of (state dependent) units
+        #         # and their inputs to match the substrate state
+        #         units = self.validate_unit_states(units)
 
-            # Force the state of (state dependent) units
-            # and their inputs to match the substrate state
-            units = self.validate_unit_states(units)
+        #         # Combine Unit TPMs to substrate TPM
+        #         # adding relevant row from the matrix to the substrate tpm
+        #         substrate_tpm.append(self.combine_unit_tpms(units, state))
 
-            # Combine Unit TPMs to substrate TPM
-            # adding relevant row from the matrix to the substrate tpm
-            dynamic_tpm.append(self.combine_unit_tpms(units, present_state))
+        #     self.tpm = reshape_to_md(np.array(substrate_tpm))
+        #     self.state = None
 
-        self.dynamic_tpm = reshape_to_md(np.array(dynamic_tpm))
+        #     # validating unit
+        #     assert self.validate(), "Substrate did not pass validation"
 
-        # set the state of the substrate
-        self.state = state
+        # else:
+        #     # running through all possible substrate states
+        #     for past_state in tqdm(list(pyphi.utils.all_states(len(units)))):
 
-        self.tpm = (
-            state if state == None else self.all_tpm[state]
-        )  # to check for issues due to rounding
+        #         # check that the state of (state dependent) units
+        #         # and their inputs match the substrate state
+        #         units = self.validate_unit_states(units)
 
-        """
-        substrate_tpm = []
-        if self.state == None and explicit_tpm:
-            # running through all possible substrate states
-            for state in tqdm(list(pyphi.utils.all_states(len(units)))):
+        #         # Combine Unit TPMs to substrate TPM
+        #         # adding relevant row from the matrix to the substrate tpm
+        #         substrate_tpm.append(self.combine_unit_tpms(units, past_state))
 
-                # setting auxillary substrate state
-                self.state = state
+        #     self.tpm = reshape_to_md(np.array(substrate_tpm))
 
-                # Force the state of (state dependent) units
-                # and their inputs to match the substrate state
-                units = self.validate_unit_states(units)
+        #     # validating unit
+        #     assert self.validate(), "Substrate did not pass validation"
 
-                # Combine Unit TPMs to substrate TPM
-                # adding relevant row from the matrix to the substrate tpm
-                substrate_tpm.append(self.combine_unit_tpms(units, state))
-
-            self.tpm = reshape_to_md(np.array(substrate_tpm))
-            self.state = None
-
-            # validating unit
-            assert self.validate(), "Substrate did not pass validation"
-
-        else:
-            # running through all possible substrate states
-            for past_state in tqdm(list(pyphi.utils.all_states(len(units)))):
-
-                # check that the state of (state dependent) units
-                # and their inputs match the substrate state
-                units = self.validate_unit_states(units)
-
-                # Combine Unit TPMs to substrate TPM
-                # adding relevant row from the matrix to the substrate tpm
-                substrate_tpm.append(self.combine_unit_tpms(units, past_state))
-
-            self.tpm = reshape_to_md(np.array(substrate_tpm))
-
-            # validating unit
-            assert self.validate(), "Substrate did not pass validation"
-
-        self.tpm = self.tpm  # to check for issues due to rounding
-        """
+        # self.tpm = self.tpm  # to check for issues due to rounding
         # storing the units
+
         self.units = units
 
         # This node's index in the list of nodes.
@@ -1022,6 +1101,7 @@ class Substrate:
                 or type(unit.params) == dict
                 or type(unit.params) == np.ndarray
             ):
+
                 # CHECK ALL OF THIS!!!
                 substrate_unit_state = self.get_subset_state((unit.index,))
                 substrate_input_state = self.get_subset_state(unit.inputs)
@@ -1030,13 +1110,17 @@ class Substrate:
                     not unit.state == substrate_unit_state
                     or not unit.input_state == substrate_input_state
                 ):
-                    """print(
-                        "Redefining unit {} to match substrate state {},".format(
-                            unit.label, self.state
-                        )
-                    )"""
+                    # print(
+                    #     "Redefining unit {} to match substrate state {},".format(
+                    #         unit.label, self.state
+                    #     )
+                    # )
+
                     # redefining unit
-                    if unit.params["mechanism"] == "composite":
+                    if (
+                        type(unit.params) == dict
+                        and unit.params["mechanism"] == "composite"
+                    ):
                         substrate_input_state = [
                             self.get_subset_state(u.inputs)
                             for u in unit.params["CompositeUnit"].units
@@ -1055,6 +1139,18 @@ class Substrate:
                             ].mechanism_combination,
                             modulation=unit.params["CompositeUnit"].modulation,
                         ).Unit
+                    elif unit.type == "TPM":
+                        unit = Unit(
+                            unit.index,
+                            unit.inputs,
+                            params=unit.tpm,
+                            label=unit.label,
+                            state=substrate_unit_state,
+                            input_state=substrate_input_state,
+                            substrate_state=self.state,
+                            substrate_indices=self.node_indices,
+                            modulation=unit.modulation,
+                        )
 
                     else:
                         unit = Unit(
@@ -1072,6 +1168,69 @@ class Substrate:
             new_units.append(unit)
 
         return new_units
+
+    def update_substrate_tpm(self, state):
+
+        orig_state = self.state
+        dynamic_tpm = []
+        # running through all possible substrate states
+        all_states = list(pyphi.utils.all_states(len(self.units)))
+
+        if all([len(u.all_tpm.keys()) > 0 for u in self.units]):
+
+            for state in (
+                tqdm(all_states)
+                if len(all_states) > PROGRESS_BAR_THRESHOLD
+                else all_states
+            ):
+
+                # Combine Unit TPMs to substrate TPM
+                # adding relevant row from the matrix to the substrate tpm
+                dynamic_tpm.append(self.combine_unit_tpms(self.units, state, state))
+
+            self.state = orig_state
+            return reshape_to_md(np.array(dynamic_tpm))
+
+    def get_dynamic_tpm(self):
+        orig_state = self.state
+        dynamic_tpm = []
+        # running through all possible substrate states
+        all_states = list(pyphi.utils.all_states(len(self.units)))
+
+        if True:#all([len(u.all_tpm.keys()) > 0 for u in self.units]):
+
+            for state in (
+                tqdm(all_states)
+                if len(all_states) > PROGRESS_BAR_THRESHOLD
+                else all_states
+            ):
+
+                # Combine Unit TPMs to substrate TPM
+                # adding relevant row from the matrix to the substrate tpm
+                dynamic_tpm.append(self.combine_unit_tpms(self.units, state, state))
+
+            self.state = orig_state
+            return reshape_to_md(np.array(dynamic_tpm))
+
+        else:
+            print("Consider putting all tpms in units")
+            for state in (
+                tqdm(all_states)
+                if len(all_states) > PROGRESS_BAR_THRESHOLD
+                else all_states
+            ):
+
+                # setting auxillary substrate state
+
+                self.update_state(state)
+                units = self.validate_unit_states(units)
+
+                # Combine Unit TPMs to substrate TPM
+                # adding relevant row from the matrix to the substrate tpm
+                dynamic_tpm.append(self.combine_unit_tpms(units, state, state))
+
+            self.state = orig_state
+            return reshape_to_md(np.array(dynamic_tpm))
 
     def validate(self):
         return True
@@ -1107,23 +1266,40 @@ class Substrate:
         )
 
     def update_state(self, state):
-        return Substrate(self.units, state=state)
+        if all([state in u.all_tpm for u in self.units]):
+            self.set_tpm(state)
+            self.all_tpm[state] = self.tpm
+            return self
 
-    def combine_unit_tpms(self, units, past_state):
+        else:
+            substrate = Substrate(self.units, state=state)
+            self.all_tpm[state] = substrate.tpm
+            return self
+
+    def combine_unit_tpms(self, units, past_state, present_state):
 
         unit_response = []
         # going through each unit to find its state-dependent activation probability
         for unit in units:
-            unit_response.append(
-                float(unit.tpm[tuple([past_state[i] for i in unit.inputs])])
-            )
-        """# sorting the activation probability in an ascending order
-        full_tpm = np.array(unit_response)
-        substrate_tpm = []
-        for ix in sorted(set(self.node_indices)):
-            substrate_tpm.append(full_tpm[ix])
+            if True:#present_state in unit.all_tpm:
+                unit_response.append(
+                    float(
+                        unit.all_tpm[present_state][
+                            tuple([past_state[i] for i in unit.inputs])
+                        ]
+                    )
+                )
+            else:
+                unit_response.append(
+                    float(unit.tpm[tuple([past_state[i] for i in unit.inputs])])
+                )
+        # # sorting the activation probability in an ascending order
+        # full_tpm = np.array(unit_response)
+        # substrate_tpm = []
+        # for ix in sorted(set(self.node_indices)):
+        #     substrate_tpm.append(full_tpm[ix])
 
-        return substrate_tpm"""
+        # return substrate_tpm
         return unit_response
 
     def create_cm(self, units):
@@ -1136,17 +1312,63 @@ class Substrate:
 
         return
 
-    def set_dynamic_tpm(self):
+    def set_state(self, state):
+        self.state = state
+
+    def set_tpm(self, state):
+
+        if state in self.all_tpm:
+            self.tpm = self.all_tpm[state]
+        elif all([state in u.all_tpm for u in self.units]):
+            # set the state of the substrate
+            self.set_state(state)
+
+            all_states = list(pyphi.utils.all_states(len(self.units)))
+            substrate_tpm = []
+            for past_state in all_states:
+                # Combine Unit TPMs to substrate TPM
+                # adding relevant row from the matrix to the substrate tpm
+                substrate_tpm.append(
+                    self.combine_unit_tpms(self.units, past_state, state)
+                )
+
+            self.tpm = reshape_to_md(np.array(substrate_tpm))
+
+            self.all_tpm[state] = self.tpm
+
+        elif state is None:
+            self.tpm = None
+        else:
+            # set the state of the substrate
+            self.set_state(state)
+            self.units = self.validate_unit_states(self.units)
+
+            all_states = list(pyphi.utils.all_states(len(self.units)))
+            substrate_tpm = []
+            for past_state in all_states:
+                # Combine Unit TPMs to substrate TPM
+                # adding relevant row from the matrix to the substrate tpm
+                substrate_tpm.append(
+                    self.combine_unit_tpms(self.units, past_state, state)
+                )
+
+            self.tpm = reshape_to_md(np.array(substrate_tpm))
+
+            self.all_tpm[state] = self.tpm
+
+    def set_all_tpms(self):
 
         orig_state = self.state
-        dynamic_tpm = np.ndarray(self.tpm.shape)
+        # running through all possible substrate states
+        all_states = list(pyphi.utils.all_states(len(self.units)))
+        for present_state in (
+            tqdm(all_states) if len(all_states) > PROGRESS_BAR_THRESHOLD else all_states
+        ):
+            # setting auxillary substrate state
+            self.set_state(present_state)
+            self.set_tpm(present_state)
 
-        for state in pyphi.utils.all_states(len(self)):
-            self.update_state(state)
-            dynamic_tpm[state] = self.tpm[state]
-
-        self.update_state(orig_state)
-        self.dynamic_tpm = dynamic_tpm
+        self.state = orig_state
 
     def get_network(self):
         if self.state == None:
@@ -1172,9 +1394,11 @@ class Substrate:
                     nodes,
                 )
             else:
-                print("remaking substrate to enforce correct state dependence")
-                substrate = self.update_state(state)
-                return pyphi.subsystem.Subsystem(substrate.get_network(), state, nodes)
+
+                self = self.update_state(state)
+                subsystem = pyphi.subsystem.Subsystem(self.get_network(), state, nodes)
+                self = self.update_state(state)
+                return subsystem
 
     def get_model(self, state=None):
         rows, cols = np.where(self.cm == 1)
@@ -1239,14 +1463,17 @@ class Substrate:
                         state[ix] = s
                     states.append(tuple(state))
             elif type(evoked) == int:
+                print('hey',flush=True)
 
                 states = []
                 for initial_state in tqdm(
                     list(pyphi.utils.all_states(len(self) - len(clamped_ix)))
                 ):
                     initial_state = list(initial_state)
-                    for i, s in zip(clamped_ix, clamped_state):
-                        initial_state.insert(i, s)
+                    
+                    for i in clamped_ix:
+                        initial_state.insert(i,np.random.randint(0,2))
+                        
                     trial = [tuple(initial_state)]
 
                     for t in range(timesteps):
@@ -1254,12 +1481,55 @@ class Substrate:
                         comparison = rng.random(len(initial_state))
 
                         state = [1 if P > c else 0 for P, c in zip(P_next, comparison)]
-                        if t < evoked:
+                        if t >= evoked:
                             for ix, s in zip(clamped_ix, clamped_state):
                                 state[ix] = s
                         trial.append(tuple(state))
 
                     states.append(trial)
+            elif type(evoked) == list:
+
+                states = []
+                for initial_state in tqdm(
+                    list(pyphi.utils.all_states(len(self) - len(clamped_ix)))
+                ):
+                    initial_state = list(initial_state)
+                    
+                    for i in clamped_ix:
+                        initial_state.insert(i,np.random.randint(0,2))
+                        
+                    trial = [tuple(initial_state)]
+
+                    for t in range(timesteps):
+                        P_next = self.dynamic_tpm[trial[-1]]
+                        comparison = rng.random(len(initial_state))
+
+                        state = [1 if P > c else 0 for P, c in zip(P_next, comparison)]
+                        if t >= evoked[0] and t < evoked[1]:
+                            for ix, s in zip(clamped_ix, clamped_state):
+                                state[ix] = s
+                        trial.append(tuple(state))
+
+                    states.append(trial)
+                    
+            elif evoked == 'all':
+
+                states = [(0,)*len(self)]
+                
+                for clamp in tqdm(
+                    list(pyphi.utils.all_states(len(clamped_ix)))
+                ):
+                    
+                    for t in range(timesteps):
+                        P_next = self.dynamic_tpm[states[-1]]
+                        comparison = rng.random(len(self))
+
+                        state = [1 if P > c else 0 for P, c in zip(P_next, comparison)]
+                        for ix, s in zip(clamped_ix, clamp):
+                            state[ix] = s
+                        
+                        states.append(tuple(state))
+                        
             else:
 
                 states = []
@@ -1288,3 +1558,205 @@ class Substrate:
     def to_json(self):
         """Return a JSON-serializable representation."""
         return self.index
+
+
+class System(pyphi.subsystem.Subsystem):
+    def __init__(
+        self,
+        units: list[Unit],
+        substrate_ixs: tuple[int],
+        substrate_state: tuple[int],
+        system_ixs: tuple[int],
+    ):
+        self.units = units
+        self.state = tuple([unit.state[0] for unit in self.units])
+        self.node_indices = tuple([unit.index for unit in self.units])
+        self.node_labels = tuple([unit.label for unit in self.units])
+
+        print(list(self.units[0].all_tpm.keys())[0], flush=True)
+        system_units = self.subsystem_units(substrate_ixs, substrate_state, system_ixs)
+
+        print(list(system_units[0].all_tpm.keys())[0], flush=True)
+        system_state = tuple([unit.state[0] for unit in system_units])
+        self.substrate = Substrate(system_units, state=system_state)
+        self.subsystem = self.substrate.get_subsystem()
+
+        self.units = system_units
+        self.state = tuple([unit.state[0] for unit in self.units])
+        self.node_indices = tuple([unit.index for unit in self.units])
+        self.node_labels = tuple([unit.label for unit in self.units])
+
+    def __repr__(self):
+        return "System {} in {}".format(
+            "|".join([u.label for u in self.units]),
+            "".join([str(u.state[0]) for u in self.units]),
+        )
+
+    def __str__(self):
+        return self.__repr__()
+
+    def __len__(self):
+        return len(self.units)
+
+    def subsystem_units(
+        self,
+        substrate_ixs: tuple[int],
+        substrate_state: tuple[int],
+        system_ixs: tuple[int],
+    ):
+        # NOTE: add checks to make sure all indices are represented etc.
+
+        # all indices inputing to the substrate units
+        input_ixs = set([index for unit in self.units for index in unit.inputs])
+        # prepare to marginalize out any input from units not present in the substrate
+        marginalize_ixs = input_ixs - set(substrate_ixs)
+        # prepare to condition unit tpms on inputs from outside the system
+        condition_ixs = input_ixs - set(system_ixs) - marginalize_ixs
+
+        substrate_units = []
+        for u in tqdm(self.units, desc="Updating units"):
+
+            if u.index in system_ixs:
+
+                # copy unit to avoid destroying
+                unit = deepcopy(u)
+
+                self.update_unit_state(unit, substrate_ixs, substrate_state)
+
+                # create tpm object
+                tpm = pyphi.tpm.ExplicitTPM(unit.tpm)
+
+                tpm = self.get_unit_tpm(
+                    unit,
+                    tpm,
+                    substrate_ixs,
+                    marginalize_ixs,
+                    condition_ixs,
+                    substrate_state,
+                )
+
+                # remaining "live" inputs
+                live_inputs = tuple(
+                    [
+                        system_ixs.index(i)
+                        for i in unit.inputs
+                        if not i in marginalize_ixs.union(condition_ixs)
+                    ]
+                )
+
+                # update all_tpms
+                long_keys = []
+                if type(unit.all_tpm) == dict:
+                    new_all_tpm = dict()
+                    for sub_state in pyphi.utils.all_states(len(substrate_ixs)):
+                        long_state = tuple(
+                            [
+                                0
+                                if not i in unit.inputs + (unit.index,)
+                                else sub_state[substrate_ixs.index(i)]
+                                for i in range(len(u.substrate_state))
+                            ]
+                        )
+                        new_tpm = pyphi.tpm.ExplicitTPM(unit.all_tpm[long_state])
+                        new_tpm = self.get_unit_tpm(
+                            unit,
+                            new_tpm,
+                            substrate_ixs,
+                            marginalize_ixs,
+                            condition_ixs,
+                            substrate_state,
+                        )
+                        new_all_tpm[sub_state] = new_tpm
+
+                # get the updated unit
+                substrate_unit = Unit(
+                    system_ixs.index(unit.index),
+                    live_inputs,
+                    params=tpm,
+                    tpm=tpm,
+                    label=unit.label,
+                    state=unit.state,
+                    all_tpm=True,
+                    inherited_tpm=new_all_tpm,
+                )
+                substrate_units.append(substrate_unit)
+
+        return substrate_units
+
+    def update_unit_state(
+        self, unit: Unit, substrate_ixs: tuple[int], substrate_state: tuple[int]
+    ):
+
+        # check which substrate and state is stored in the unit
+        old_substrate_state = self.state
+        old_substrate_indices = self.node_indices
+
+        # update substrate state with the state from kwargs
+        new_substrate_state = tuple(
+            [
+                substrate_state[substrate_ixs.index(i)] if i in substrate_ixs else s
+                for s, i in zip(old_substrate_state, old_substrate_indices)
+            ]
+        )
+
+        # recreate unit with correct substrate state
+        unit.set_substrate_state(new_substrate_state)
+
+    def get_unit_tpm(
+        self, unit, tpm, substrate_ixs, marginalize_ixs, condition_ixs, substrate_state
+    ):
+
+        # marginalize out non-substrate units from inputs
+        non_substrate_inputs = [
+            i for i, ix in enumerate(unit.inputs) if ix in marginalize_ixs
+        ]
+        tpm = tpm.marginalize_out(non_substrate_inputs)
+
+        # condition on non-system units in inputs
+        non_system_input_mapping = {
+            unit.inputs.index(ix): s
+            for ix, s in zip(substrate_ixs, substrate_state)
+            if ix in condition_ixs and ix in unit.inputs
+        }
+        tpm = tpm.condition_tpm(non_system_input_mapping)
+
+        # get tpm of only "live" inputs
+        tpm = np.squeeze(tpm.tpm)[..., np.newaxis]
+
+        return tpm
+
+    def pyphi_kwargs(self, units: list[Unit]):
+
+        unit_tpms = [
+            np.concatenate((1 - unit.tpm, unit.tpm), axis=len(unit.tpm.shape) - 1)
+            for unit in units
+        ]
+        node_labels = tuple([unit.label for unit in units])
+        cm = np.array(
+            [
+                [1 if i in unit.inputs else 0 for i in range(len(units))]
+                for unit in units
+            ]
+        )
+
+        return dict(tpms=unit_tpms, node_labels=node_labels, cm=cm)
+
+    def get_pyphi_kwargs(
+        self,
+        units: list[Unit] = None,
+        substrate_indices: tuple[int] = None,
+        substrate_state: tuple[int] = None,
+        system_indices: tuple[int] = None,
+    ):
+        if units == None:
+            units = self.units
+        if substrate_indices == None:
+            substrate_indices = tuple([unit.index for unit in units])
+        if substrate_state == None:
+            substrate_state = tuple([unit.state[0] for unit in units])
+        if system_indices == None:
+            system_indices = substrate_indices
+
+        return self.pyphi_kwargs(
+            self.subsystem_units(substrate_indices, substrate_state, system_indices)
+        )

@@ -8,6 +8,9 @@ TODO:
 
 """
 
+def map_to_floor_and_ceil(y,floor,ceiling):
+    return floor + (ceiling - floor) * y
+
 
 def sigmoid(
     unit,
@@ -24,11 +27,8 @@ def sigmoid(
         if ising:
             state = tuple([s * 2 - 1 for s in state])
         total_input = sum(state * np.array([input_weights[n] for n in range(n_nodes)]))
-        y = ceiling * (
-            floor
-            + (1 - floor) / (1 + np.e ** (-determinism * (total_input - threshold)))
-        )
-        return y
+        y = 1 / (1 + np.e ** (-determinism * (total_input - threshold)))
+        return map_to_floor_and_ceil(y,floor,ceiling)
 
     n_nodes = len(input_weights)
 
@@ -148,7 +148,7 @@ def resonnator(
         # make state interpreted as ising
         state = [2 * s - 1 for s in state]
 
-        total_input = sum(state * np.array([w[n] for n in range(n_nodes)]))
+        total_input = np.sum(state * np.array(w))
         y = 1 / (1 + np.e ** (-determinism * (total_input - threshold)))
         return y
 
@@ -161,7 +161,7 @@ def resonnator(
     )
 
     # make it between floor and ceiling
-    tpm = tpm * (ceiling - floor) + floor
+    tpm = map_to_floor_and_ceil(tpm,floor,ceiling)
 
     return tpm.reshape([2] * n_nodes + [1], order="F").astype(float)
 
@@ -290,7 +290,7 @@ def majority(unit, i=0, floor=None, ceiling=None):
     return tpm
 
 
-def mismatch_corrector(unit, i=0, floor=None, ceiling=None):
+def mismatch_corrector(unit, i=0, floor=None, ceiling=None, bias=None):
 
     # Ensure unit has input state
     if unit.input_state == None:
@@ -306,6 +306,11 @@ def mismatch_corrector(unit, i=0, floor=None, ceiling=None):
         print("State not given unit {}. Setting to off.".format(unit.label))
         unit.set_state((0,))
 
+    # Ensure unit has state
+    if bias > 1:
+        print("bias must be below 1, setting to 1.".format(unit.label))
+        bias = 1
+
     # Ensure that there is only one unit
     if len(unit.inputs) > 1:
         print(
@@ -317,7 +322,7 @@ def mismatch_corrector(unit, i=0, floor=None, ceiling=None):
 
     # check whether state of unit matches its input, and create tpm accordingly
     if unit.state == unit.input_state:
-        tpm = np.ones([2]) * 0.5
+        tpm = np.ones([2]) * 0.5 - (unit.state[0] * 2 - 1) * bias * 0.5
     else:
         tpm = np.array([floor, ceiling])
 
