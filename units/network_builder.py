@@ -17,6 +17,7 @@ from copy import deepcopy
 import pyphi
 import networkx as nx
 import matplotlib.pyplot as plt
+import string
 
 from tqdm.auto import tqdm
 from units.unit_functions import *
@@ -139,7 +140,44 @@ class AllTPMDict(dict):
         u_state = (state[self.unit.index],)
         i_state = tuple([state[i] for i in self.unit.inputs])
         return self.unit.all_unit_tpm[(u_state, i_state)]
+    
 
+class Build:
+
+    def units_from_weights(weights, unit_types, unit_params, labels=None, indices=None):
+
+        def infer_inputs(input_weights):
+            return tuple([i for i, value in enumerate(input_weights) if not value == 0])
+
+        def infer_input_weights(input_weights):
+            return tuple([value for value in input_weights if not value == 0])
+        
+        standard_labels = string.ascii_uppercase
+
+        N = len(weights[0])
+
+        if labels==None:
+            labels = standard_labels[:N]
+        if indices==None:
+            indices = tuple(range(N))
+
+        for i, params in enumerate(unit_params):
+            if 'input_weights' in params:
+                params['input_weights'] = infer_input_weights(weights.T[i])
+
+        return [
+            Unit(
+                index=indices[i],
+                label=labels[i],
+                inputs=infer_inputs(weights.T[i]),
+                params=dict(
+                    mechanism=unit_types[i],
+                    params=unit_params[i],
+                ),
+            )
+            for i in range(N)
+        ]
+    
 
 class Unit:
     """A unit that can constitute a substrate.
@@ -178,7 +216,7 @@ class Unit:
         substrate_state=None,
         substrate_indices=None,
         modulation=None,
-        all_tpm=False,
+        all_tpm=True,
         inherited_tpm=False,
     ):
         # Storing the parameters
