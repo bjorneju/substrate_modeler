@@ -1,23 +1,17 @@
 # TODO:
+# - allow for composite units
+# - allow for non-binary units
+# - make better "default values" for "UNIT_VALIDATION" (probably just update in unit functions)
 # - REFACTOR to a atom -> unit -> substrate structure
-# -- atoms take N input states and transforms them to (the same) N outputs
-# -- units are combinations of M>=1 atoms
-# -- substrates are combinations of Q>=1 units
-# - CHANGE THE COMPOSITE UNIT TO JUST TAKE A LIST OF UNITS AND COMBINE THEM (but how?!)
-# - FIGURE OUT WEIRD PROBABILITIES
-# - consider making the CompositeUnit somehow also an instance of the Unit. Just a special case?
-# - consider how to make MechanismCombination dependent on the probabilities
-# - write validate function
-# - put validate function in pyphi
-# - document functions
-# - allow for sending in function
+# - Deal with modulation (put into unit params?)
+
+from typing import Dict, Union, Tuple
 
 import numpy as np
 from copy import deepcopy
 import pyphi
 import networkx as nx
 import matplotlib.pyplot as plt
-import string
 
 from tqdm.auto import tqdm
 from units.unit_functions import *
@@ -126,58 +120,36 @@ def reshape_to_md(tpm):
         return pyphi.convert.to_md(tpm)
 
 
-class AllTPMDict(dict):
+class TPMDict(dict):
     def __init__(self, unit):
         self.unit = unit
     
     def __missing__(self, state):
-        # probably dont need to store this at all
-        #self[state] = 
         value = self.yield_tpm(state)
         return value
     
     def yield_tpm(self, state):
-        u_state = (state[self.unit.index],)
-        i_state = tuple([state[i] for i in self.unit.inputs])
-        return self.unit.all_unit_tpm[(u_state, i_state)]
-    
-
-class Build:
-
-    def units_from_weights(weights, unit_types, unit_params, labels=None, indices=None):
-
-        def infer_inputs(input_weights):
-            return tuple([i for i, value in enumerate(input_weights) if not value == 0])
-
-        def infer_input_weights(input_weights):
-            return tuple([value for value in input_weights if not value == 0])
         
-        standard_labels = string.ascii_uppercase
-
-        N = len(weights[0])
-
-        if labels==None:
-            labels = standard_labels[:N]
-        if indices==None:
-            indices = tuple(range(N))
-
-        for i, params in enumerate(unit_params):
-            if 'input_weights' in params:
-                params['input_weights'] = infer_input_weights(weights.T[i])
-
-        return [
-            Unit(
-                index=indices[i],
-                label=labels[i],
-                inputs=infer_inputs(weights.T[i]),
-                params=dict(
-                    mechanism=unit_types[i],
-                    params=unit_params[i],
-                ),
+        # if unit state and input state
+        if type(state[0]) == tuple: 
+            u_state = (state[self.unit.index],)
+            i_state = tuple([state[i] for i in self.unit.inputs])
+            # check if there already is a "all unit tpm" representation (TO BE REMOVED)
+        if hasattr(self.unit,'all_unit_tpm') and (u_state, i_state) in self.unit.all_unit_tpm:
+            return self.unit.all_unit_tpm[(u_state, i_state)]
+        else:
+            ixs = (self.unit.index,) + self.unit.inputs
+            state = u_state + i_state
+            substate = tuple(
+                [
+                    0 if i not in ixs else state[ixs.index(i)]
+                    for i in range(len(self.unit.substrate_state))
+                ]
             )
-            for i in range(N)
-        ]
-    
+            self.unit.input_state = i_state
+            self.unit.set_unit_tpm(substate)
+            return self.unit.tpm
+
 
 class Unit:
     """A unit that can constitute a substrate.
@@ -206,94 +178,177 @@ class Unit:
 
     def __init__(
         self,
-        index,
-        inputs,
-        params=None,
-        label=None,
-        state=None,
-        input_state=None,
-        tpm=None,
-        substrate_state=None,
-        substrate_indices=None,
-        modulation=None,
-        all_tpm=True,
-        inherited_tpm=False,
+        index: int,
+        state: Union[int, Tuple[int,]],
+        inputs: tuple[int],
+        input_state: tuple[int],
+        mechanism: str,
+        params: dict,
+        label: str = None,
     ):
         # Storing the parameters
-        self.params = params
-
-        # Storing modulation parameters
-        self.modulation = modulation
-
-        # Store the type of unit
-        if not (type(tpm) == np.ndarray or type(params) == np.ndarray):
-            self.type = params["mechanism"]
-        else:
-            self.type = "TPM"
+        self._params = params
 
         # This unit's index in the list of units.
-        self.index = index
+        self._index = index
+        
+        # Node labels used in the system
+        self._label = label
+        
+        # Store the type of unit
+        self._mechanism = mechanism
 
         # List of indices that input to the unit (one pr mechanism).
-        self.inputs = tuple(inputs)
+        self._inputs = inputs
 
-        # set substrate indices and state
-        self.substrate_indices = (
-            tuple(range(np.max((index,) + tuple(inputs)) + 1))
-            if substrate_indices == None
-            else substrate_indices
-        )
-        self.substrate_state = (
-            [
-                0,
-            ]
-            * len(self.substrate_indices)
-            if substrate_state == None
-            else substrate_state
-        )
+        # Set unit state
+        self._state = state
+        
+        #  and input state
+        self._input_state = input_state
+        
+        # set tpm (None means I am not overriding with a substrate state)
+        #self._tpm = None
 
-        # if unit and input states are given, but substrate state is not, then the unit states are used. Otherwise, these are inherited from substrate state
-        if substrate_state == None and not state == None:
-            self.substrate_state[self.index] = state[0]
-        if substrate_state == None and not input_state == None:
-            for i_s, i in zip(input_state, inputs):
-                self.substrate_state[i] = i_s
-        self.substrate_state = tuple(self.substrate_state)
-
-        # Node labels used in the system
-        if not label == None:
-            self.label = label
-        else:
-            self.label = str(self.index)
-
-        # Setting unit state (always congruent with the substrate state )
-        self.state = self.get_substate((index,))
-        #  and input (only congruent if not explicitly given)
-        self.input_state = (
-            self.get_substate(tuple(inputs)) if input_state == None else input_state
-        )
         # validating unit
         assert self.validate(), "Unit did not pass validation"
 
-        # Store the type of unit
-        if not type(tpm) == np.ndarray:
-            self.set_unit_tpm()
+        
+    @property
+    def params(self):
+        return self._params
+    
+    @params.setter
+    def params(self, params: dict):
+        self._params = params
+        
+    @property
+    def index(self):
+        return self._index
+    
+    @index.setter
+    def index(self, index: int):
+        self._index = index
+        
+    @property
+    def label(self):
+        return self._label
+    
+    @label.setter
+    def label(self, label: str=None):
+        
+        if not label == None:
+            self._label = label
         else:
-            self.tpm = tpm
+            self._label = str(self.index)
+        
+    @property
+    def mechanism(self):
+        return self._mechanism
+    
+    @mechanism.setter
+    def mechanism(self, mechanism: str):
+        self._mechanism = mechanism
+        
+    @property
+    def inputs(self):
+        return self._inputs
+    
+    @inputs.setter
+    def inputs(self, inputs: tuple[int]):
+        self._inputs = inputs
+        
+    @property
+    def state(self):
+        if type(self._state)==int:
+            if self._state not in (0, 1):
+                raise ValueError("state must be 0 or 1")
+            self._state = (self._state,)
+        else:
+            if self._state[0] not in (0, 1):
+                raise ValueError("state must be 0 or 1")
+        return self._state
+    
+    @state.setter
+    def state(self, state: Union[int, Tuple[int,]]):
+        return self._state
+        
+    @property
+    def input_state(self):
+        return self._input_state
+    
+    @input_state.setter
+    def input_state(self, input_state: tuple[int]):
+        if not all([s in (0, 1) for s in input_state]):
+            raise ValueError("all input states must be 0 or 1")
+        self._input_state = input_state
+        
+    @property
+    def tpm(self):
+        func = UNIT_VALIDATION[self.mechanism]["function"]
+        self._tpm = func(self, **self.params)
+        return self._tpm
+    
+    # this might be bad (neet to use as unit.tpm = substrate_state)
+    @tpm.setter
+    def tpm(self, substrate_state: tuple[int]=None):
+        
+        if not substrate_state==None:
+            self.state = substrate_state[self.index]
+            self.input_state = tuple([
+                substrate_state[i] for i in self.inputs
+            ])
+        return self.tpm
+    
+    
+    def all_tpm(self, substrate_state: tuple[int]):
+        self.state = substrate_state[self.index]
+        self.input_state = tuple([
+            substrate_state[i] for i in self.inputs
+        ])
+        return self.tpm
+    
+    def set_unit_tpm(self, substrate_state=None):
+        """np.ndarray: The unit TPM.
 
-        # store all possible Unit tpms
-        if all_tpm and not inherited_tpm:
-            self.get_all_tpms()
-        elif all_tpm:
-            self.all_tpm = inherited_tpm
-
+        A multidimensional array, containing the probabilities for the unit
+        turning ON, given the possible states of the inputs.
+        """
+        if not self.type == "composite":
+            # if params include a specification of a unit
+            func = UNIT_VALIDATION[self.type]["function"]
+            self.tpm = func(self, **self.params)
+            
+        else:
+            # TODO fix after refactoring (code from old version)
+            c_unit = self.params["CompositeUnit"]
+            self.tpm = CompositeUnit(
+                c_unit.index,
+                c_unit.all_inputs,
+                params=c_unit.params,
+                label=c_unit.label,
+                state=c_unit.state,
+                input_state=c_unit.input_state,
+                mechanism_combination=c_unit.mechanism_combination,
+                substrate_state=self.substrate_state
+                if substrate_state is None
+                else substrate_state,
+                substrate_indices=self.substrate_indices,
+                modulation=self.modulation,
+                all_tpm=True,
+            ).tpm
+            self.type = "Composite unit: {}".format(
+                [unit.type for unit in c_unit.units]
+            )
+            
+            
     def validate(self):
         """Return whether the specifications for the unit are valid.
 
         The checks for validity are defined in the local UNIT_VALIDATION object.
         """
         if type(self.params) == dict:
-            unit_type = self.params["mechanism"]
+            unit_type = self.mechanism
 
             if not unit_type == "composite":
                 assert (
@@ -301,19 +356,19 @@ class Unit:
                 ), "Unit mechanism '{}' is not valid".format(unit_type)
                 # check that all required params are present
                 for key, value in UNIT_VALIDATION[unit_type]["default_params"].items():
-                    if not key in self.params["params"]:
+                    if not key in self.params:
                         print(
                             "Unit {} missing {} params, defaulting to {}".format(
                                 self.label, key, value
                             )
                         )
-                        self.params["params"][key] = value
+                        self.params[key] = value
 
         return True
 
     def __repr__(self):
         return "Unit(type={}, label={}, state={})".format(
-            self.type, self.label, self.state
+            self.mechanism, self.label, self.state
         )
 
     def __str__(self):
@@ -353,37 +408,40 @@ class Unit:
 
     def get_all_tpms(self):
 
-        orig_unit_state = self.state
-        orig_input_state = self.input_state
-        ixs = (self.index,) + self.inputs
+        if True:
+            self.all_tpm = AllTPMDict(self)
+        else:
+            orig_unit_state = self.state
+            orig_input_state = self.input_state
+            ixs = (self.index,) + self.inputs
 
-        self.all_unit_tpm = dict()
-        for u_state in pyphi.utils.all_states(1):
-            self.state = u_state
-            all_states = list(pyphi.utils.all_states(len(self.inputs)))
-            for i_state in all_states:
-                state = u_state + i_state
-                substate = tuple(
-                    [
-                        0 if i not in ixs else state[ixs.index(i)]
-                        for i in range(len(self.substrate_state))
-                    ]
-                )
-                self.input_state = i_state
-                self.set_unit_tpm(substate)
-                self.all_unit_tpm[(u_state, i_state)] = self.tpm
-        self.input_unit_tpm = self.all_unit_tpm
-        
-        self.all_tpm = AllTPMDict(self)
+            self.all_unit_tpm = dict()
+            for u_state in pyphi.utils.all_states(1):
+                self.state = u_state
+                all_states = list(pyphi.utils.all_states(len(self.inputs)))
+                for i_state in all_states:
+                    state = u_state + i_state
+                    substate = tuple(
+                        [
+                            0 if i not in ixs else state[ixs.index(i)]
+                            for i in range(len(self.substrate_state))
+                        ]
+                    )
+                    self.input_state = i_state
+                    self.set_unit_tpm(substate)
+                    self.all_unit_tpm[(u_state, i_state)] = self.tpm
+            self.input_unit_tpm = self.all_unit_tpm
 
-        '''
-        for s_state in pyphi.utils.all_states(len(self.substrate_state)):
-            u_state = (s_state[self.index],)
-            i_state = tuple([s_state[i] for i in self.inputs])
-            self.all_tpm[s_state] = self.all_unit_tpm[(u_state, i_state)]'''
+            self.all_tpm = AllTPMDict(self)
 
-        self.state = orig_unit_state
-        self.input_state = orig_input_state
+            '''
+            for s_state in pyphi.utils.all_states(len(self.substrate_state)):
+                u_state = (s_state[self.index],)
+                i_state = tuple([s_state[i] for i in self.inputs])
+                self.all_tpm[s_state] = self.all_unit_tpm[(u_state, i_state)]'''
+
+            self.state = orig_unit_state
+            self.input_state = orig_input_state
 
     def set_unit_tpm(self, substrate_state=None):
         """np.ndarray: The unit TPM.
@@ -414,7 +472,7 @@ class Unit:
                         else substrate_state,
                         substrate_indices=self.substrate_indices,
                         modulation=self.modulation,
-                        all_tpm=False,
+                        all_tpm=True,
                     ).tpm
                     self.type = "Composite unit: {}".format(
                         [unit.type for unit in c_unit.units]
@@ -435,94 +493,6 @@ class Unit:
                         # if params include a specification of a unit
                         func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
                         self.tpm = func(self, **self.params["params"])
-
-    def actual_modulation(self):
-        para = self.params["params"].copy()
-
-        # check that a modulator is ON
-        if any(self.get_substate(self.modulation["modulators"])):
-
-            # check if modulation is state dependent
-            if type(self.modulation["function"]) == list:
-                # if it is state dependent, the list contains modulation for OFF on index 0, and modulation for ON on index 1
-                para.update(
-                    {
-                        self.modulation["parameter"]: self.modulation["function"][
-                            self.state[0]
-                        ](para[self.modulation["parameter"]])
-                    }
-                )
-
-            else:
-                para.update(
-                    {
-                        self.modulation["parameter"]: self.modulation["function"](
-                            para[self.modulation["parameter"]]
-                        )
-                    }
-                )
-        # if params include a specification of a unit
-        func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
-        self.tpm = func(self, **para)
-
-    def virtual_modulation(self):
-
-        print(
-            "VIRTUAL MODULATION DOES NOT WORK. THERE ARE MISSHAPEN TPMS. CHECK reshape_to_md FUNCTION. THERE IS AN EXTRA DIMENSION AT THE END WHEN THE UNIT ITSELF IS IN THE INPUTS. BUT THIS SHOWS UP ALWAYS FOR VIRTUAL MODULATION"
-        )
-
-        # this means the modulator does not acually modulate the mechanism of the unit,
-        # but rather acts as a separate input unit that "virtually" modulated the mechanism.
-
-        # if params include a specification of a unit
-        func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
-        tpm = func(self, **self.params["params"])
-
-        # create the modulated tpm
-        para = self.params["params"].copy()
-
-        # check that a modulator is ON
-        if any(self.get_substate(self.modulation["modulators"])):
-            para.update(
-                {
-                    self.modulation["parameter"]: self.modulation["function"](
-                        para[self.modulation["parameter"]]
-                    )
-                }
-            )
-        # if params include a specification of a unit
-        func = UNIT_VALIDATION[self.params["mechanism"]]["function"]
-        modulated_tpm = func(self, **para)
-
-        # add modulators to unit inputs
-        modulators = self.modulation["modulators"]
-        self.set_inputs(
-            self.inputs + tuple([m for m in modulators if not m in self.inputs])
-        )
-
-        # create a tpm that includes the modulators as inputs
-        mod_ixs = [i for i, ix in enumerate(self.inputs) if ix in modulators]
-        true_inputs = tuple(
-            [i for i, ix in enumerate(self.inputs) if ix not in modulators]
-        )
-        updated_tpm = []
-        for in_state in pyphi.utils.all_states(len(self.inputs)):
-            mod_ON = any([in_state[i] for i in mod_ixs])
-            true_input_state = tuple([in_state[i] for i in true_inputs])
-            if mod_ON:
-                prob = modulated_tpm[true_input_state]
-            else:
-                prob = tpm[true_input_state]
-
-            if type(prob) == np.ndarray:
-                # this happens when self is in the true inputs
-                updated_tpm.append([prob[0]])
-            else:
-                updated_tpm.append([prob])
-
-        self.tpm = reshape_to_md(updated_tpm)
-        print(self.tpm.shape)
-        print(self.inputs)
 
     def set_input_state(self, state):
         """The current state of the inputs.
@@ -629,7 +599,7 @@ class CompositeUnit:
         substrate_state=None,
         substrate_indices=None,
         modulation=None,
-        all_tpm=False,
+        all_tpm=True,
     ):
 
         # Construct Units for each of the subunits constituting the CompositeUnit
@@ -651,7 +621,7 @@ class CompositeUnit:
                 substrate_state=substrate_state,
                 substrate_indices=substrate_indices,
                 modulation=mod,
-                all_tpm=False,
+                all_tpm=all_tpm,
             )
             for input_ixs, input_s, param, mod in zip(
                 inputs, input_state, params, modulation

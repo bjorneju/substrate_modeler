@@ -14,7 +14,6 @@ def map_to_floor_and_ceil(y,floor,ceiling):
 
 def sigmoid(
     unit,
-    i=0,
     input_weights=None,
     determinism=None,
     threshold=None,
@@ -51,7 +50,7 @@ def sigmoid(
 
 
 def sor_gate(
-    unit, i=0, pattern_selection=None, selectivity=None, floor=None, ceiling=None
+    unit, pattern_selection=None, selectivity=None, floor=None, ceiling=None
 ):
 
     # get state of
@@ -101,7 +100,6 @@ def sor_gate(
 
 def resonnator(
     unit,
-    i=0,
     input_weights=None,
     determinism=None,
     threshold=None,
@@ -118,15 +116,15 @@ def resonnator(
     if unit.input_state == None:
         print(
             "input state not given for {} unit {}. Setting to all off.".format(
-                unit.params["mechanism"], unit.label
+                unit.mechanism, unit.label
             )
         )
-        unit.set_input_state((0,) * len(unit.inputs))
+        unit.input_state((0,) * len(unit.inputs))
 
     # Ensure unit has state
     if unit.state == None:
         print("State not given unit {}. Setting to off.".format(unit.label))
-        unit.set_state((0,))
+        unit.state((0,))
 
     # the tpm is uniform for all states except the input state (i.e. short term plasticity)
     tpm = np.ones([2] * (len(unit.input_state))) * floor
@@ -137,12 +135,16 @@ def resonnator(
     unit_state = unit.state[0]
 
     # alter weight to make it push unit towards its state, weighted using weight_scale_mapping
+    #print('unit state: {}'.format(unit_state),flush=True)
+    #print('input state: {}'.format(unit.input_state),flush=True)
+    #print('pre: {}'.format(input_weights),flush=True)
     w = [
         input_weights[i] * weight_scale_mapping[(unit_state, s)]
         if s == unit_state
         else -input_weights[i] * weight_scale_mapping[(unit_state, s)]
         for i, s in enumerate(unit.input_state)
     ]
+    #print('post: {}'.format(w),flush=True)
 
     def resonnatorFunc(state, input_weights, determinism, threshold, unit_state):
         # make state interpreted as ising
@@ -167,7 +169,7 @@ def resonnator(
 
 
 def mismatch_pattern_detector(
-    unit, i=0, pattern_selection=None, selectivity=None, floor=None, ceiling=None
+    unit,  pattern_selection=None, selectivity=None, floor=None, ceiling=None
 ):
     # This mechanism is selective to certain inputs (i.e. they turn it ON with P=ceiling, while the remaining possible input patterns turn it OFF with P=floor). However, it's selectivity (probability of turning on) depends the state of the unit: if the unit is already in the state that matches the pattern, then the effect of the inputs is reduced by the selectivity factor. That is, if the unit is ON, and one of its patterns are on its inputs, then the probability that *this mechanism* will turn keep it ON in the next step i P=0.5+(ceiling-0.5)/selectivity.
     # The mechanism is supposed to mimic short-term plasticity mechanisms (or other short term adaptive changes in the function of cells) that make them strongly responsive to mismatching/unpredicted inputs, but weakly coupled to inputs that provide no new information (inputs that match the predicted state of things).
@@ -226,32 +228,32 @@ def mismatch_pattern_detector(
     return tpm
 
 
-def copy_gate(unit, i=0, floor=None, ceiling=None):
+def copy_gate(unit,  floor=None, ceiling=None):
     tpm = np.ones([2]) * floor
     tpm[1] = ceiling
     return tpm
 
 
-def and_gate(unit, i=0, floor=None, ceiling=None):
+def and_gate(unit,  floor=None, ceiling=None):
     tpm = np.ones((2, 2)) * floor
     tpm[(1, 1)] = ceiling
     return tpm
 
 
-def or_gate(unit, i=0, floor=None, ceiling=None):
+def or_gate(unit,  floor=None, ceiling=None):
     tpm = np.ones((2, 2)) * ceiling
     tpm[(0, 0)] = floor
     return tpm
 
 
-def xor_gate(unit, i=0, floor=None, ceiling=None):
+def xor_gate(unit,  floor=None, ceiling=None):
     tpm = np.ones((2, 2)) * floor
     tpm[(0, 1)] = ceiling
     tpm[(1, 0)] = ceiling
     return tpm
 
 
-def weighted_mean(unit, i=0, weights=[], floor=None, ceiling=None):
+def weighted_mean(unit,  weights=[], floor=None, ceiling=None):
 
     weights = [w / np.sum(weights) for w in weights]
     N = len(weights)
@@ -266,7 +268,7 @@ def weighted_mean(unit, i=0, weights=[], floor=None, ceiling=None):
     return tpm
 
 
-def democracy(unit, i=0, floor=None, ceiling=None):
+def democracy(unit,  floor=None, ceiling=None):
 
     N = len(unit.inputs)
 
@@ -278,7 +280,7 @@ def democracy(unit, i=0, floor=None, ceiling=None):
     return tpm
 
 
-def majority(unit, i=0, floor=None, ceiling=None):
+def majority(unit,  floor=None, ceiling=None):
 
     N = len(unit.inputs)
 
@@ -290,7 +292,7 @@ def majority(unit, i=0, floor=None, ceiling=None):
     return tpm
 
 
-def mismatch_corrector(unit, i=0, floor=None, ceiling=None, bias=None):
+def mismatch_corrector(unit,  floor=None, ceiling=None, bias=None):
 
     # Ensure unit has input state
     if unit.input_state == None:
@@ -478,7 +480,7 @@ def stabilized_sigmoid(
 
 def biased_sigmoid(
     unit,
-    i=0,
+    
     input_weights=None,
     determinism=None,
     threshold=None,
@@ -532,7 +534,7 @@ def biased_sigmoid(
     return tpm.reshape([2] * n_nodes + [1], order="F").astype(float)
 
 
-def gabor_gate(unit, i=0, preferred_states=None, floor=None, ceiling=None):
+def gabor_gate(unit,  preferred_states=None, floor=None, ceiling=None):
 
     # Ensure states are tuples
     preferred_states = list(map(tuple, preferred_states))
