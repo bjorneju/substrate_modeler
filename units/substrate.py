@@ -1,3 +1,18 @@
+"""
+unit.py
+=============
+This module provides functionality for creating substrates from units for Integrated information theory analysis.
+The 'substrate' module currently only has one section:
+
+
+Section 1 - Classes
+-------------------
+    Class 1 -- Substrate
+    Class 2 -- System
+Please refer to the docstrings for information about each of these.
+
+"""
+
 from .Unit import Unit
 from .utils import reshape_to_md
 

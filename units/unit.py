@@ -1,3 +1,28 @@
+"""
+unit.py
+=============
+This module provides functionality for creating units that constitute substrate models in Integrated information theory.
+The 'unit' module is separated into three sections:
+
+
+Section 1 - Unit classes
+------------------------
+Defines three classes
+    Class 1 -- BaseUnit
+    Class 2 -- Unit
+    Class 3 -- CompositeUnit
+Please refer to the docstrings for information about each of these.
+
+Section 2 - Unit (I/O) functions
+--------------------------------
+This section contains functions for creating unit TPMs. That is, it provides specific, predifined functions that can be used to define units.
+
+Section 3 - Unit validation
+---------------------------
+This section contains functions for validating the creation of units and their TPMs.
+
+"""
+
 # TODO:
 # - Fix the time spent by caching the unit TPM's (Maybe stick the TPM-dict in the base unit?)
 # - allow for composite units
