@@ -1,14 +1,14 @@
 from setuptools import setup
 
 setup(
-    name="units",
+    name="substrate_modeler",
     version="0.1.0",
     description="Create pyphi substrates from the ground up",
-    url="https://github.com/bjorneju/pyphi_units",
+    url="https://github.com/bjorneju/substrate_modeler",
     author="Bjørn E juel",
     author_email="bjorneju@gmail.com",
     license="BSD 2-clause",
-    packages=["units"],
+    packages=["substrate_modeler"],
     install_requires=[
         "tqdm",
         "numpy",
