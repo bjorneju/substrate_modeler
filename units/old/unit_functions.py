@@ -1,3 +1,7 @@
+from .network_builder import BaseUnit as Unit
+
+from typing import Dict, Union, Tuple, List
+
 import numpy as np
 from itertools import product
 import pyphi
@@ -12,17 +16,39 @@ def map_to_floor_and_ceil(y,floor,ceiling):
     return floor + (ceiling - floor) * y
 
 
+
 ### UNITS 
+UNIT_FUNCTIONS = {
+    "gabor": gabor_gate,
+    "sigmoid":sigmoid,
+    "resonnator": resonnator,
+    "sor": sor_gate,
+    "mismatch_pattern_detector": mismatch_pattern_detector,
+    "copy": copy_gate,
+    "and": and_gate,
+    "or": or_gate,
+    "xor": xor_gate,
+    "weighted_mean": weighted_mean,
+    "democracy": democracy,
+    "majority": majority,
+    "mismatch_corrector": mismatch_corrector,
+    "modulated_sigmoid": modulated_sigmoid,
+    "stabilized_sigmoid": stabilized_sigmoid,
+    "biased_sigmoid": biased_sigmoid,
+}
 
 def sigmoid(
-    unit,
-    input_weights=None,
-    determinism=None,
-    threshold=None,
-    floor=None,
-    ceiling=None,
-    ising=True,
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+    input_weights: Tuple[float] = None,
+    determinism: float = 5.0,
+    threshold: float = 0.0,
+    ising: bool = True,
 ):
+    # validate all kwargs
+    validate_kwargs(locals())
+    
     def LogFunc(state, input_weights, determinism, threshold):
 
         if ising:
@@ -52,7 +78,12 @@ def sigmoid(
 
 
 def sor_gate(
-    unit, pattern_selection=None, selectivity=None, floor=None, ceiling=None
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+    pattern_selection: 
+    Tuple[Tuple[int]] = None, 
+    selectivity: float = 2.0,
 ):
 
     # get state of
@@ -101,13 +132,13 @@ def sor_gate(
 
 
 def resonnator(
-    unit,
-    input_weights=None,
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+    input_weights: Tuple[float] = None,
     determinism=None,
     threshold=None,
     weight_scale_mapping=None,
-    floor=None,
-    ceiling=None,
 ):
 
     # Ensure nceiling is not more than 1
@@ -137,16 +168,12 @@ def resonnator(
     unit_state = unit.state[0]
 
     # alter weight to make it push unit towards its state, weighted using weight_scale_mapping
-    #print('unit state: {}'.format(unit_state),flush=True)
-    #print('input state: {}'.format(unit.input_state),flush=True)
-    #print('pre: {}'.format(input_weights),flush=True)
     w = [
         input_weights[i] * weight_scale_mapping[(unit_state, s)]
         if s == unit_state
         else -input_weights[i] * weight_scale_mapping[(unit_state, s)]
         for i, s in enumerate(unit.input_state)
     ]
-    #print('post: {}'.format(w),flush=True)
 
     def resonnatorFunc(state, input_weights, determinism, threshold, unit_state):
         # make state interpreted as ising
@@ -171,7 +198,11 @@ def resonnator(
 
 
 def mismatch_pattern_detector(
-    unit,  pattern_selection=None, selectivity=None, floor=None, ceiling=None
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+    pattern_selection: Tuple[Tuple[int]] = None, 
+    selectivity: float = 1.0
 ):
     # This mechanism is selective to certain inputs (i.e. they turn it ON with P=ceiling, while the remaining possible input patterns turn it OFF with P=floor). However, it's selectivity (probability of turning on) depends the state of the unit: if the unit is already in the state that matches the pattern, then the effect of the inputs is reduced by the selectivity factor. That is, if the unit is ON, and one of its patterns are on its inputs, then the probability that *this mechanism* will turn keep it ON in the next step i P=0.5+(ceiling-0.5)/selectivity.
     # The mechanism is supposed to mimic short-term plasticity mechanisms (or other short term adaptive changes in the function of cells) that make them strongly responsive to mismatching/unpredicted inputs, but weakly coupled to inputs that provide no new information (inputs that match the predicted state of things).
@@ -230,32 +261,53 @@ def mismatch_pattern_detector(
     return tpm
 
 
-def copy_gate(unit,  floor=None, ceiling=None):
+def copy_gate(
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+):
     tpm = np.ones([2]) * floor
     tpm[1] = ceiling
     return tpm
 
 
-def and_gate(unit,  floor=None, ceiling=None):
+def and_gate(
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+):
     tpm = np.ones((2, 2)) * floor
     tpm[(1, 1)] = ceiling
     return tpm
 
 
-def or_gate(unit,  floor=None, ceiling=None):
+def or_gate(
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+):
     tpm = np.ones((2, 2)) * ceiling
     tpm[(0, 0)] = floor
     return tpm
 
 
-def xor_gate(unit,  floor=None, ceiling=None):
+def xor_gate(
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+):
     tpm = np.ones((2, 2)) * floor
     tpm[(0, 1)] = ceiling
     tpm[(1, 0)] = ceiling
     return tpm
 
 
-def weighted_mean(unit,  weights=[], floor=None, ceiling=None):
+def weighted_mean(
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+    weights: List[float] = [],
+):
 
     weights = [w / np.sum(weights) for w in weights]
     N = len(weights)
@@ -270,7 +322,11 @@ def weighted_mean(unit,  weights=[], floor=None, ceiling=None):
     return tpm
 
 
-def democracy(unit,  floor=None, ceiling=None):
+def democracy(
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+):
 
     N = len(unit.inputs)
 
@@ -282,7 +338,11 @@ def democracy(unit,  floor=None, ceiling=None):
     return tpm
 
 
-def majority(unit,  floor=None, ceiling=None):
+def majority(
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+):
 
     N = len(unit.inputs)
 
@@ -294,7 +354,12 @@ def majority(unit,  floor=None, ceiling=None):
     return tpm
 
 
-def mismatch_corrector(unit,  floor=None, ceiling=None, bias=None):
+def mismatch_corrector(
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+    bias: float = 0.0
+):
 
     # Ensure unit has input state
     if unit.input_state == None:
@@ -334,13 +399,13 @@ def mismatch_corrector(unit,  floor=None, ceiling=None, bias=None):
 
 
 def modulated_sigmoid(
-    unit,
-    input_weights: list,
-    determinism: float,
-    threshold: float,
+    unit: Unit,
+    input_weights: List[float],
     modulation: dict,
-    floor: float,
-    ceiling: float,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+    determinism: float = 2.0,
+    threshold: float = 0.0,
 ):
     # modulation must be a dict like {'modulator': tuple(index), 'threshold': float, 'determinism': float}
     # modulation will update the sigmoid function as indicated by the functions, and depending on whether the unit is ON or OFF
@@ -402,13 +467,13 @@ def modulated_sigmoid(
 
 
 def stabilized_sigmoid(
-    unit,
+    unit: Unit,
     input_weights: list,
     determinism: float,
     threshold: float,
     modulation: dict,
-    floor: float,
-    ceiling: float,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
 ):
     # modulation must be a dict like {'modulator': tuple(index), 'threshold': float, 'determinism': float}
     # modulation will update the sigmoid function as indicated by the functions, and depending on whether the unit is ON or OFF
@@ -481,13 +546,12 @@ def stabilized_sigmoid(
 
 
 def biased_sigmoid(
-    unit,
-    
-    input_weights=None,
-    determinism=None,
-    threshold=None,
-    floor=None,
-    ceiling=None,
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,
+    input_weights: Tuple[float] = None,
+    determinism: float = 2.0,
+    threshold: float = 0.0,
 ):
     # A sigmoid unit that is biased in its activation by the last unit in the inputs.
     # The bias consists in a rescaling of the activation probability to make it more in line with the biasing unit. The biasing unit is assumed to be the last one of the inputs.
@@ -536,7 +600,12 @@ def biased_sigmoid(
     return tpm.reshape([2] * n_nodes + [1], order="F").astype(float)
 
 
-def gabor_gate(unit,  preferred_states=None, floor=None, ceiling=None):
+def gabor_gate(
+    unit: Unit,
+    floor: float = 0.0,
+    ceiling: float = 1.0,  
+    preferred_states: Tuple[Tuple[int]] = None, 
+):
 
     # Ensure states are tuples
     preferred_states = list(map(tuple, preferred_states))
