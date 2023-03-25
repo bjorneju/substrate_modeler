@@ -12,6 +12,8 @@ def map_to_floor_and_ceil(y,floor,ceiling):
     return floor + (ceiling - floor) * y
 
 
+### UNITS 
+
 def sigmoid(
     unit,
     input_weights=None,
