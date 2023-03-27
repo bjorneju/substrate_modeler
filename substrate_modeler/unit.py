@@ -25,11 +25,8 @@ This section contains functions for validating the creation of units and their T
 """
 
 # TODO:
-# - Fix the time spent by caching the unit TPM's (Maybe stick the TPM-dict in the base unit?)
-# - allow for composite units
+# - Understand what is wrong with composite units. Something with TPM and indexing of inputs
 # - allow for non-binary units
-# - make better "default values" for "UNIT_VALIDATION" (probably just update in unit functions)
-# - REFACTOR to a atom -> unit -> substrate structure
 # - Deal with modulation (put into unit params?)
 
 
