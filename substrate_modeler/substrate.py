@@ -1,3 +1,6 @@
+# TODO
+# - FIX INPUT STATE SETTING OF UNITS MAKE SURE THE STATE AND TPM OF UNITS ARE PROPERLY UPDATED
+
 """
 substrate.py
 =============
@@ -13,12 +16,14 @@ Please refer to the docstrings for information about each of these.
 
 """
 
-from .unit import Unit
-from .utils import reshape_to_md
-
 from typing import Tuple, List
 from functools import cached_property
+
+from .unit import Unit
+from .utils import reshape_to_md
 import pyphi
+from pyphi.tpm import ExplicitTPM
+
 from tqdm.auto import tqdm
 import numpy as np
 import networkx as nx
@@ -49,11 +54,25 @@ class Substrate:
 
     """
 
-    def __init__(self, units: List[Unit], state: Tuple[int] = None, implicit: bool=False):
+    def __init__(
+        self,
+        units: List[Unit],
+        state: Tuple[int] = None,
+        input_state: Tuple[int] = None,
+        implicit: bool = False
+    ):
         """Initialize a new `Substrate` object. """
 
+        self._implicit = implicit
         self._units = units
         self.state = state
+        if input_state is None:
+            input_state = tuple(self._state)
+        self.input_state = input_state
+
+    @property
+    def units(self):
+        return self._units
 
     @property
     def state(self):
@@ -63,13 +82,31 @@ class Substrate:
             for s, u in zip(self._state, self._units):
                 u.state = s
         else:
-            self._state = tuple([u.state[0] for u in self._units])
+            self._state = tuple([
+                u.state[0] if type(u.state) is tuple else u.state
+                for u in self._units
+            ])
         return self._state
 
     @state.setter
     def state(self, state):
         self._state = state
-        return self.state
+        self.state
+
+    @property
+    def input_state(self):
+        """Tuple[int]: The binary input state to the substrate units, as a tuple of ints."""
+        # set units to correct input state
+        for u in self._units:
+            u.input_state = tuple(self._input_state[i] for i in u._inputs)
+
+        return self._input_state
+
+    @input_state.setter
+    def input_state(self, state):
+        self._input_state = state
+        self.input_state
+
 
     @cached_property
     def node_indices(self):
@@ -89,17 +126,26 @@ class Substrate:
     def tpm(self):
         """numpy.ndarray: The truth table of the substrate, as a numpy array of binary values."""
 
-        # running through all possible input states
-        all_states = list(pyphi.utils.all_states(len(self._units)))
+        if self._implicit:
+            # get the unit tpm for every unit in the substrate
+            return [
+                np.stack(
+                    (1-np.array(unit_tpm), np.array(unit_tpm)), axis=len(self)
+                )
+                for unit_tpm in self.unit_tpms()
+            ]
+        else:
+            # running through all possible input states
+            all_states = list(pyphi.utils.all_states(len(self._units)))
 
-        return reshape_to_md(np.array([
-            self.combine_unit_tpms(self._units, past_state, self.state)
-            for past_state in (
-                tqdm(all_states)
-                if len(all_states) > PROGRESS_BAR_THRESHOLD
-                else all_states
-            )
-        ]))
+            return reshape_to_md(np.array([
+                self.combine_unit_tpms(self._units, past_state, self.state)
+                for past_state in (
+                    tqdm(all_states)
+                    if len(all_states) > PROGRESS_BAR_THRESHOLD
+                    else all_states
+                )
+            ]))
 
     def state_dependent_tpm(self, state):
         """numpy.ndarray: The truth table of the substrate, as a numpy array of binary values."""
@@ -129,20 +175,24 @@ class Substrate:
 
     @cached_property
     def dynamic_tpm(self):
-        orig_state = self._state
-        # running through all possible substrate states
-        all_states = list(pyphi.utils.all_states(len(self._units)))
+        if self._implicit:
+            print('Not implemented for implicit substrates')
+            return False
+        else:
+            orig_state = self._state
+            # running through all possible substrate states
+            all_states = list(pyphi.utils.all_states(len(self._units)))
 
-        dynamic_tpm = [
-            self.combine_unit_tpms(self._units, state, state)
-            for state in (
-                tqdm(all_states)
-                if len(all_states) > PROGRESS_BAR_THRESHOLD
-                else all_states
-            )
-        ]
-        self.state = orig_state
-        return reshape_to_md(np.array(dynamic_tpm))
+            dynamic_tpm = [
+                self.combine_unit_tpms(self._units, state, state)
+                for state in (
+                    tqdm(all_states)
+                    if len(all_states) > PROGRESS_BAR_THRESHOLD
+                    else all_states
+                )
+            ]
+            self.state = orig_state
+            return ExplicitTPM(reshape_to_md(np.array(dynamic_tpm)))
 
     @cached_property
     def cm(self):
@@ -180,37 +230,138 @@ class Substrate:
             and self.outputs == other.outputs
         )
 
-    def get_network(self, state: Tuple[int]=None):
-        if self.state is None:
-            return pyphi.network.Network(self.dynamic_tpm, self.cm, self.node_labels)
-        elif state is not None:
-            self.state = state
-            return pyphi.network.Network(self.tpm, self.cm, self.node_labels)
-            
-        else:
-            return pyphi.network.Network(self.tpm, self.cm, self.node_labels)
+    def isolate_subset(self, subset_indices):
+        units = [
+            unit for i, unit in enumerate(self._units) if i in subset_indices
+        ]
+        current_inputs = [
+            unit.inputs for unit in units
+        ]
+        indices_to_marginalize_out = [
+            tuple(
+                unit._inputs.index(i)
+                for i in inputs
+                if i not in subset_indices
+            )
+            for unit, inputs in zip(units, current_inputs)
+        ]
+        new_index_mapping = {
+            unit.index: i
+            for i, unit in enumerate(units)
+        }
+        new_tpms = [
+            np.squeeze(np.array(unit.tpm.marginalize_out(marge)))[
+                ..., np.newaxis
+            ]
+            for unit, marge in zip(units, indices_to_marginalize_out)
+        ]
+        new_indices = [
+            new_index_mapping[i]
+            for i in subset_indices
+        ]
+        new_inputs = [
+            tuple(new_index_mapping[i] for i in inputs if i in subset_indices)
+            for inputs in current_inputs
+        ]
+        new_state = tuple([
+            self.state[i] for i in subset_indices
+        ])
+        new_input_states = [
+            tuple(self.input_state[i] for i in new_input)
+            for new_input in new_inputs
+        ]
+        new_units = [
+            Unit(
+                index=unit_index,
+                inputs=unit_inputs,
+                mechanism=unit_tpm,
+                state=unit_state,
+                input_state=unit_input_state,
+                label=unit.label,
+                unit_type=unit._type
+            )
+            for (
+                unit_index,
+                unit_inputs,
+                unit_tpm,
+                unit_state,
+                unit_input_state,
+                unit
+            ) in zip(
+                new_indices,
+                new_inputs,
+                new_tpms,
+                new_state,
+                new_input_states,
+                units
+            )
+        ]
+        
+        new_input_state = tuple([
+            self.input_state[i] for i in subset_indices
+        ])
+        
+        return Substrate(
+            units=new_units,
+            state=new_state,
+            input_state=new_input_state,
+            implicit=self._implicit
+        )
 
-    def get_subsystem(
-        self, 
-        state: Tuple[int] = None, 
+    def network(self, state: Tuple[int] = None):
+        # ensure state is set correctly
+        self.state = state
+
+        # return network based on implicit or explicit TPM
+        if self._implicit:
+            return pyphi.Network(
+                self.tpm,
+                cm=self.cm,
+                node_labels=self.node_labels,
+                state_space=self.unit_state_space()
+            )
+        else:
+            return pyphi.network.Network(
+                self.dynamic_tpm, self.cm, self.node_labels
+            )
+
+    def subsystem(
+        self,
         nodes: Tuple[int] = None
     ):
         if nodes is None:
             nodes = self.node_indices
-
-        # make sure the substrate is state_specific
-        if state is None and self.state is not None:
-            return pyphi.subsystem.Subsystem(self.get_network(), self.state, nodes)
-        elif state is not None:
-            return pyphi.subsystem.Subsystem(
-                pyphi.network.Network(
-                    self.state_dependent_tpm(state), self.cm, self.node_labels
-                ),
-                state,
+        if self._implicit:
+            return pyphi.Subsystem(
+                self.network(self.state),
+                self.state,
                 nodes,
             )
 
-    def get_model(self, state=None):
+    def expand_unit_tpm_dimensions(self, unit):
+        # expand unit tpm to fit substrate size
+        unit_tpm = unit.tpm
+        input_indices = unit.inputs
+        new_shape = np.ones(len(self), dtype=int)
+        new_shape[list(input_indices)] = unit_tpm.shape[:-1]
+        return unit_tpm.reshape(new_shape)
+
+    def unit_tpms(self):
+        # create unit tpms with dimensions expanded to substrate size
+        return [
+            self.expand_unit_tpm_dimensions(unit)
+            for unit in self._units
+        ]
+
+    def unit_state_space(self):
+
+        # create unit tpms with dimensions expanded to substrate size
+        return [
+            tuple(unit.state_space)
+            for unit in self._units
+        ]
+
+    def model(self, state=None):
         rows, cols = np.where(self.cm == 1)
         edges = zip(rows.tolist(), cols.tolist())
         gr = nx.DiGraph()
