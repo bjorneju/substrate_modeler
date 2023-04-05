@@ -1,0 +1,44 @@
+WELCOME_OFF: true
+PROGRESS_BARS: false
+RELATION_COMPUTATION: "CONCRETE"
+PARTITION_TYPE: "TRI"
+PROGRESS_BARS: false
+
+
+# Controls parallel evaluation of complexes.
+PARALLEL_COMPLEX_EVALUATION:
+  chunksize: 1
+  sequential_threshold: 1
+  parallel: true
+  progress: true
+# Controls parallel evaluation of system partitions.
+PARALLEL_CUT_EVALUATION:
+  chunksize: 64
+  sequential_threshold: 64
+  parallel: true
+  progress: true
+# Controls parallel evaluation of candidate mechanisms.
+PARALLEL_CONCEPT_EVALUATION:
+  chunksize: 1
+  sequential_threshold: 1
+  parallel: true
+  progress: true
+# Controls parallel evaluation of candidate purviews.
+PARALLEL_PURVIEW_EVALUATION:
+  chunksize: 16
+  sequential_threshold: 16
+  parallel: false
+  progress: true
+# Controls parallel evaluation of mechanism partitions.
+PARALLEL_MECHANISM_PARTITION_EVALUATION:
+  chunksize: 256
+  sequential_threshold: 256
+  parallel: false
+  progress: true
+# Controls parallel evaluation of relations.
+# Only applies if RELATION_COMPUTATION = 'CONCRETE'.
+PARALLEL_RELATION_EVALUATION:
+  chunksize: 128
+  sequential_threshold: 128
+  parallel: true
+  progress: true
