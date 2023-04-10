@@ -174,6 +174,7 @@ class BaseUnit:
         inputs: tuple[int] = (None,),
         input_state: tuple[int] = (None,),
         state_space: tuple[str] = (0, 1),
+        original_index: int = False
     ):
 
         # This unit's index in the list of units.
@@ -196,14 +197,18 @@ class BaseUnit:
         else:
             if state[0] not in (0, 1):
                 raise ValueError("state must be 0 or 1")
-        
+
         #  and input state
         if not all([s in (0, 1) for s in input_state]):
             raise ValueError("all input states must be 0 or 1")
         self._input_state = input_state
-        
+
         self.state_space = state_space
         
+        if not original_index:
+            original_index = index
+        self._original_index = original_index
+
     @property
     def index(self):
         """int: The index of the unit in the list of units."""
@@ -273,6 +278,16 @@ class BaseUnit:
         """
         self._input_state = input_state
         self.input_state
+        
+    @property
+    def original_index(self):
+        """int: The index of the unit in the list of units."""
+        return self._original_index
+    
+    @original_index.setter
+    def original_index(self, index: int):
+        self._original_index = index
+        self.original_index
 
     def __repr__(self):
         """
@@ -324,7 +339,8 @@ class Unit(BaseUnit):
         input_state: tuple[int] = None,
         params: dict = None,
         label: str = None,
-        unit_type: str = 'custom'
+        unit_type: str = 'custom',
+        original_index: int = False
     ):
         if type(state) is int:
             state = (state,)
@@ -335,6 +351,7 @@ class Unit(BaseUnit):
             label=label,
             inputs=inputs,
             input_state=input_state,
+            original_index=original_index
         )
 
         # Store the parameters
