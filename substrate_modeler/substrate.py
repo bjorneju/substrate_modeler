@@ -16,7 +16,7 @@ Please refer to the docstrings for information about each of these.
 
 """
 
-from typing import Tuple, List
+from typing import Tuple, List, Union
 from functools import cached_property
 
 from .unit import Unit
@@ -230,7 +230,11 @@ class Substrate:
             and self.outputs == other.outputs
         )
 
-    def isolate_subset(self, subset_indices):
+    def isolate_subset(
+        self,
+        subset_indices,
+        indices_to_condition: Tuple[int] = False,
+    ):
         units = [
             unit for i, unit in enumerate(self._units) if i in subset_indices
         ]
@@ -245,18 +249,34 @@ class Substrate:
             )
             for unit, inputs in zip(units, current_inputs)
         ]
+        new_tpms = []
+        if indices_to_condition:
+            indices_to_condition = [
+                {
+                    unit._inputs.index(i): unit._input_state[unit._inputs.index(i)]
+                    for i in inputs
+                    if i in indices_to_condition and i not in subset_indices
+                }
+                for unit, inputs in zip(units, current_inputs)
+            ]
+            for unit, cond in zip(units, indices_to_condition):
+                new_tpms.append(unit.tpm.condition_tpm(cond))
         new_index_mapping = {
             unit.index: i
             for i, unit in enumerate(units)
         }
         new_tpms = [
-            np.squeeze(np.array(unit.tpm.marginalize_out(marge)))[
+            np.squeeze(np.array(new_tpm.marginalize_out(marge)))[
                 ..., np.newaxis
             ]
-            for unit, marge in zip(units, indices_to_marginalize_out)
+            for new_tpm, marge in zip(new_tpms, indices_to_marginalize_out)
         ]
         new_indices = [
             new_index_mapping[i]
+            for i in subset_indices
+        ]
+        old_indices = [
+            i
             for i in subset_indices
         ]
         new_inputs = [
@@ -278,7 +298,8 @@ class Substrate:
                 state=unit_state,
                 input_state=unit_input_state,
                 label=unit.label,
-                unit_type=unit._type
+                unit_type=unit._type,
+                original_index=old_index
             )
             for (
                 unit_index,
@@ -286,21 +307,23 @@ class Substrate:
                 unit_tpm,
                 unit_state,
                 unit_input_state,
-                unit
+                unit,
+                old_index
             ) in zip(
                 new_indices,
                 new_inputs,
                 new_tpms,
                 new_state,
                 new_input_states,
-                units
+                units,
+                old_indices
             )
         ]
-        
+
         new_input_state = tuple([
             self.input_state[i] for i in subset_indices
         ])
-        
+
         return Substrate(
             units=new_units,
             state=new_state,
@@ -360,6 +383,68 @@ class Substrate:
             tuple(unit.state_space)
             for unit in self._units
         ]
+    
+    def concept(
+        self,
+        mechanism: Tuple[int],
+        cause_purview_indices: Tuple[int] = False,
+        effect_purview_indices: Tuple[int] = False,
+        purview_max_size: int = 10,
+        indices_to_condition: tuple[int] = False,
+        cause_purviews: Tuple[Tuple[int]] = False,
+        effect_purviews: Tuple[Tuple[int]] = False
+    ):
+        if not cause_purview_indices:
+            cause_purview_indices = tuple(set([
+                i for ix in mechanism
+                for i, _input in enumerate(self.cm[:, ix])
+                if not _input == 0.0
+            ]))
+        if not effect_purview_indices:
+            effect_purview_indices = tuple(set([
+                i for ix in mechanism
+                for i, _output in enumerate(self.cm[ix, :])
+                if not _output == 0.0
+            ]))
+
+        # isolate the subset of units in the mechanism or purviews
+        unit_indices = tuple(set([
+            i
+            for i in mechanism + cause_purview_indices + effect_purview_indices
+        ]))
+
+        # define the smaller subsystem
+        subset = self.isolate_subset(
+            unit_indices, indices_to_condition=indices_to_condition
+        )
+        subsystem = subset.subsystem()
+
+        index_mapping = {
+            unit.original_index: i
+            for i, unit in enumerate(subset.units)
+        }
+        
+        # redefine mechanism
+        mechanism = tuple([index_mapping[i] for i in mechanism])
+
+        # define possible purviews
+        cause_purviews = tuple(pyphi.utils.powerset(
+            tuple([index_mapping[i] for i in cause_purview_indices]),
+            max_size=purview_max_size,
+            nonempty=True
+        ))
+        effect_purviews = tuple(pyphi.utils.powerset(
+            tuple([index_mapping[i] for i in effect_purview_indices]),
+            max_size=purview_max_size,
+            nonempty=True
+        ))
+        print(len(cause_purviews), len(effect_purviews))
+        # compute concept
+        return subsystem.concept(
+            mechanism,
+            cause_purviews=cause_purviews,
+            effect_purviews=effect_purviews
+        )
 
     def model(self, state=None):
         rows, cols = np.where(self.cm == 1)
