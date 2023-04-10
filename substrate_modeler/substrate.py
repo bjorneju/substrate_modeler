@@ -168,7 +168,7 @@ class Substrate:
             float(
                 unit.state_dependent_tpm(present_state)[
                     tuple([past_state[i] for i in unit.inputs])
-                ]
+                ][0]
             )
             for unit in units
         ]
@@ -343,6 +343,10 @@ class Substrate:
                 node_labels=self.node_labels,
                 state_space=self.unit_state_space()
             )
+        elif state is not None:
+            return pyphi.network.Network(
+                self.tpm, self.cm, self.node_labels
+            )
         else:
             return pyphi.network.Network(
                 self.dynamic_tpm, self.cm, self.node_labels
@@ -354,12 +358,11 @@ class Substrate:
     ):
         if nodes is None:
             nodes = self.node_indices
-        if self._implicit:
-            return pyphi.Subsystem(
-                self.network(self.state),
-                self.state,
-                nodes,
-            )
+        return pyphi.Subsystem(
+            self.network(self.state),
+            self.state,
+            nodes,
+        )
 
     def expand_unit_tpm_dimensions(self, unit):
         # expand unit tpm to fit substrate size
