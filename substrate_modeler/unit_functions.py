@@ -71,7 +71,7 @@ def sor_gate(
         ceiling = 1.0
 
     # Ensure selectivity is larger than 1
-    if not selectivity > 1:
+    if not selectivity >= 1:
         print(
             "Selectivity for SOR gates must be bigger than 1, adjusting to inverse of value given."
         )
