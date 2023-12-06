@@ -227,14 +227,17 @@ class BaseUnit:
         Raises:
             ValueError: If the state is not a valid binary value (0 or 1).
         """
-        if type(self._state) is int:
+        if type(self._state) is not tuple:
             return (self._state,)
         else:
             return self._state
     
     @state.setter
     def state(self, state: Union[int, Tuple[int,]]):
-        self._state = state
+        if type(state) is not tuple:
+            self._state = (state,)
+        else:
+            self._state = state
         self.state
         
     @property
