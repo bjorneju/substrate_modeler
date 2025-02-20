@@ -164,15 +164,25 @@ class Substrate:
             List[float]: The combined truth table of the substrate, as a list of float values.
         """
 
-        return [
+        probs = []
+        for unit in units:
+          pp = unit.state_dependent_tpm(present_state)[
+              tuple([past_state[i] for i in unit.inputs])
+          ]
+          if type(pp) is not float:
+            probs.append(float(pp[0]))
+          else:
+            probs.append(pp)
+    
+        return probs
+        '''return [
             float(
                 unit.state_dependent_tpm(present_state)[
                     tuple([past_state[i] for i in unit.inputs])
                 ][0]
             )
             for unit in units
-        ]
-
+        ]'''
     @cached_property
     def dynamic_tpm(self):
         if self._implicit:
