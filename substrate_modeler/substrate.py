@@ -169,7 +169,7 @@ class Substrate:
           pp = unit.state_dependent_tpm(present_state)[
               tuple([past_state[i] for i in unit.inputs])
           ]
-          if type(pp) is not float:
+          if not isinstance(pp, (int, float, np.number)):
             probs.append(float(pp[0]))
           else:
             probs.append(pp)
